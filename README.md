@@ -1,9 +1,18 @@
+<div align=center>
+<img src="https://raw.githubusercontent.com/extrant/IMGSave/refs/heads/main/8edcffed756a48e0ac6018c3ef2cab66_th.jpg" width="400px" align="center">
+</div>
+
+---
+
+<h1 align="center"><b>TTC_Siren</b></h1>
+
 # 基于《最终幻想14》规则的幻卡对战求解器
 
 本项目实现了一个幻卡对战AI求解器，采用博弈树搜索算法与并行处理技术。核心为游戏状态评估和移动预测引擎，并提供可选的HTTP服务器接口以便集成。
 
-<img src="https://github.com/extrant/IMGSave/blob/main/E9A888E96BB05418C8E12CE8FD63EE5C.png" width="400px">
-
+<div align=center>
+<img src="https://github.com/extrant/IMGSave/blob/main/E9A888E96BB05418C8E12CE8FD63EE5C.png" width="400px" align="center">
+</div>
 
 ## 目前问题
 在处理**未知卡牌**的算法中，当前采用暴力填充策略，导致以下核心挑战（本质为**不完全信息博弈决策优化问题**）：
