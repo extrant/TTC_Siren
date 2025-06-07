@@ -68,6 +68,78 @@ def evaluate_state(state: GameState, ai_player_idx: int) -> float:
     return base_score * 0.7 + position_score * 0.3
 
 
+"""
+高级评估函数数学模型说明：
+
+1. 综合评分函数 (Comprehensive Evaluation Function)
+\[
+E_{total} = \alpha H + \beta P + \gamma C + \delta T + \epsilon N
+\]
+其中：
+- H: 历史启发得分 (History Heuristic Score)
+- P: 位置评估得分 (Position Evaluation Score)
+- C: 卡牌属性得分 (Card Attribute Score)
+- T: 战术评估得分 (Tactical Evaluation Score)
+- N: 邻近协同得分 (Neighborhood Synergy Score)
+权重系数：\alpha = 0.1, \beta = 1.5, \gamma = 2.0, \delta = 3.0, \epsilon = 1.0
+
+2. 历史启发评分 (History Heuristic)
+\[
+H(m) = min(\frac{h(m)}{10}, 1000)
+\]
+其中 h(m) 为历史表中的原始值
+
+3. 位置权重矩阵 (Position Weight Matrix)
+\[
+W = \begin{bmatrix} 
+1.5 & 1.0 & 1.5 \\
+1.0 & 1.2 & 1.0 \\
+1.5 & 1.0 & 1.5
+\end{bmatrix}
+\]
+
+4. 卡牌战术价值 (Card Tactical Value)
+\[
+V_{card} = \sum_{i=1}^4 E_i + S \cdot M + \sum_{j=1}^k C_j
+\]
+其中：
+- E_i: 边值评估 (Edge Values)
+- S: 星级系数 (Star Rating)
+- M: 位置乘数 (Position Multiplier)
+- C_j: 组合加成 (Combination Bonus)
+
+5. 吃子评估函数 (Capture Evaluation)
+\[
+Cap(x,y) = 30 + 5\Delta + 10(S_1 - S_2)
+\]
+其中：
+- \Delta: 数值差异 (Value Difference)
+- S_1: 己方星级 (Own Star Rating)
+- S_2: 对方星级 (Opponent Star Rating)
+
+6. 邻近协同系数 (Neighborhood Synergy)
+\[
+N(x,y) = \sum_{i,j \in Adj(x,y)} 10 \cdot I(owner_{i,j} = owner_{x,y})
+\]
+其中 I 为示性函数
+
+7. 深度奖励因子 (Depth Reward Factor)
+\[
+R(d) = min(2^d, 1000000)
+\]
+
+8. 最终评分归一化 (Score Normalization)
+\[
+Score_{final} = min(\frac{Score_{raw}}{1000}, 1.0) \cdot 1000
+\]
+
+动态评估优化：
+1. 早期游戏 (d ≤ 2): 增加位置权重 (\beta *= 1.2)
+2. 中期游戏 (2 < d ≤ 6): 增加吃子权重 (\delta *= 1.3)
+3. 晚期游戏 (d > 6): 增加协同权重 (\epsilon *= 1.4)
+
+"""
+
 def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
     """
     综合评估移动的分数，融合历史启发和启发式评估
@@ -75,8 +147,9 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
     card, (row, col) = move
     score = 0.0
     
-    # 1. 历史启发表分数 (基础权重 1.0)
-    score += history_table.get((card.card_id, row, col), 0)
+    # 1. 历史启发表分数 (基础权重 0.1)
+    history_score = history_table.get((card.card_id, row, col), 0)
+    score += min(history_score * 0.1, 1000.0)  # 限制历史分数的最大值
     
     # 2. 卡牌星级和边数值评估 (权重 2.0)
     try:
@@ -90,17 +163,17 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
     
     # 高星级卡牌在角落的评估
     if star == 3 and card_edges.count(8) >= 2 and (row, col) in [(0,0),(0,2),(2,0),(2,2)]:
-        score += 400  # 三星双8角落
+        score += 40.0  # 三星双8角落
     if star == 4 and card_edges.count(9) >= 2:
-        score += 300  # 四星双9
+        score += 30.0  # 四星双9
     if star == 5 and card_edges.count(9) >= 3:
-        score += 500  # 五星三9
+        score += 50.0  # 五星三9
         
     # 3. 位置评估 (权重 1.5)
     if (row, col) in [(0,0), (0,2), (2,0), (2,2)]:
-        score += 150  # 角落位置
+        score += 15.0  # 角落位置
     elif (row, col) == (1,1):
-        score += 100  # 中心位置
+        score += 10.0  # 中心位置
         
     # 4. 吃子评估 (权重 3.0)
     directions = [(-1, 0, 'up', 'down'), (1, 0, 'down', 'up'), 
@@ -115,13 +188,13 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
                 opp_value = getattr(opp_card, opp_dir)
                 if my_value > opp_value:
                     diff = my_value - opp_value
-                    score += 300 + diff * 50  # 基础吃子分300，每点数值差加50
+                    score += 30.0 + diff * 5.0  # 基础吃子分30，每点数值差加5
                     
                     # 如果是高星级卡吃低星级卡，额外加分
                     if star and hasattr(opp_card, 'card_id'):
                         opp_star = get_card_star_map().get(opp_card.card_id, 0)
                         if star > opp_star:
-                            score += (star - opp_star) * 100
+                            score += (star - opp_star) * 10.0
     
     # 5. 边缘保护评估 (权重 1.0)
     # 检查是否有己方卡牌在相邻位置
@@ -130,9 +203,9 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
         if 0 <= nr < 3 and 0 <= nc < 3:
             adj_card = state.board.get_card(nr, nc)
             if adj_card and adj_card.owner == card.owner:
-                score += 100  # 相邻己方卡牌
+                score += 10.0  # 相邻己方卡牌
     
-    return score
+    return float(min(score, 1000.0))  # 确保最终分数不会过大
 
 def order_moves(moves: List[Tuple], state: GameState, history_table: Dict) -> List[Tuple]:
     """
@@ -172,7 +245,7 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
     if state_hash in TRANSPOSITION_TABLE:
         tt_entry = TRANSPOSITION_TABLE[state_hash]
         if tt_entry['depth'] >= depth:
-            return SearchResult(tt_entry['score'], tt_entry['move'], path)
+            return SearchResult(float(tt_entry['score']), tt_entry['move'], path)
             
     current_player = state.players[state.current_player_idx]
     moves = [(card, pos) for card in current_player.hand 
@@ -211,13 +284,13 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
                 if best_move:
                     card, (row, col) = best_move
                     key = (card.card_id, row, col)
-                    history_table[key] = history_table.get(key, 0) + 2 ** depth
+                    history_table[key] = min(history_table.get(key, 0) + 2 ** depth, 1000000)
                 break
                 
         # 更新置换表
         TRANSPOSITION_TABLE[state_hash] = {
             'depth': depth,
-            'score': max_eval,
+            'score': float(max_eval),
             'move': best_move
         }
         
@@ -246,13 +319,13 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
                 if best_move:
                     card, (row, col) = best_move
                     key = (card.card_id, row, col)
-                    history_table[key] = history_table.get(key, 0) + 2 ** depth
+                    history_table[key] = min(history_table.get(key, 0) + 2 ** depth, 1000000)
                 break
                 
         # 更新置换表
         TRANSPOSITION_TABLE[state_hash] = {
             'depth': depth,
-            'score': min_eval,
+            'score': float(min_eval),
             'move': best_move
         }
         
@@ -288,7 +361,7 @@ def iterative_deepening_search(state: GameState, max_time: float, verbose: bool 
         depth += 1
         
         # 早停
-        if result.eval_score > 6:
+        if result.eval_score > 10:
             break
             
     return best_move, best_path
