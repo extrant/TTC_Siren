@@ -16,5 +16,15 @@ class Player:
             self.hand.remove(card)
             self.used_cards.append(card)
 
+    def get_playable_cards(self, rules: List[str] = None) -> List[Card]:
+        """
+        获取当前可以使用的卡牌列表
+        对于秩序/混乱规则，只返回can_use为True的卡牌
+        """
+        if rules and ('秩序' in rules or '混乱' in rules):
+            return [card for card in self.hand if card.can_use]
+        else:
+            return list(self.hand)  # 正常情况下所有手牌都可用
+
     def __repr__(self):
         return f"Player({self.name}, hand={self.hand}, used={self.used_cards})" 

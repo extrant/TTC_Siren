@@ -175,7 +175,7 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
     elif (row, col) == (1,1):
         score += 10.0  # 中心位置
         
-    # 4. 吃子评估 (权重 3.0)
+    # 4. 吃子评估 (权重 3.0) - 支持新规则
     directions = [(-1, 0, 'up', 'down'), (1, 0, 'down', 'up'), 
                  (0, -1, 'left', 'right'), (0, 1, 'right', 'left')]
                  
@@ -184,10 +184,12 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
         if 0 <= nr < 3 and 0 <= nc < 3:
             opp_card = state.board.get_card(nr, nc)
             if opp_card and opp_card.owner != card.owner:
-                my_value = getattr(card, my_dir)
-                opp_value = getattr(opp_card, opp_dir)
-                if my_value > opp_value:
-                    diff = my_value - opp_value
+                # 使用新的比较方法来支持逆转和王牌杀手规则
+                result = card.compare_values(my_dir, opp_card, opp_dir, state.rules)
+                if result == 1:  # 我方获胜
+                    my_value = getattr(card, my_dir)
+                    opp_value = getattr(opp_card, opp_dir)
+                    diff = abs(my_value - opp_value)
                     score += 30.0 + diff * 5.0  # 基础吃子分30，每点数值差加5
                     
                     # 如果是高星级卡吃低星级卡，额外加分
@@ -248,7 +250,8 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
             return SearchResult(float(tt_entry['score']), tt_entry['move'], path)
             
     current_player = state.players[state.current_player_idx]
-    moves = [(card, pos) for card in current_player.hand 
+    playable_cards = current_player.get_playable_cards(state.rules)
+    moves = [(card, pos) for card in playable_cards 
              for pos in state.board.available_positions()]
              
     if not moves:
@@ -331,7 +334,7 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
         
         return SearchResult(min_eval, best_move, best_path)
 
-def iterative_deepening_search(state: GameState, max_time: float, verbose: bool = False) -> Tuple:
+def iterative_deepening_search(state: GameState, max_time: float, verbose: bool = False, max_depth: int = 100) -> Tuple:
     """迭代加深搜索"""
     global START_TIME, TIME_LIMIT
     START_TIME = time.time()
@@ -342,7 +345,7 @@ def iterative_deepening_search(state: GameState, max_time: float, verbose: bool 
     best_path = []
     depth = 1
     
-    while not is_time_up():
+    while not is_time_up() and depth <= max_depth:
         if verbose:
             print(f"\n开始深度 {depth} 的搜索...")
             
@@ -360,10 +363,21 @@ def iterative_deepening_search(state: GameState, max_time: float, verbose: bool 
             
         depth += 1
         
-        # 早停
+        # 早停条件
         if result.eval_score > 10:
+            if verbose:
+                print(f"评分过高({result.eval_score})，提前结束搜索")
+            break
+        
+        # 深度限制早停
+        if depth > max_depth:
+            if verbose:
+                print(f"达到最大深度限制({max_depth})，结束搜索")
             break
             
+    if verbose:
+        print(f"搜索完成，最终深度：{depth-1}")
+        
     return best_move, best_path
 
 def find_best_move_parallel(game_state: GameState, max_depth: int = 9, verbose: bool = False,
@@ -373,11 +387,12 @@ def find_best_move_parallel(game_state: GameState, max_depth: int = 9, verbose: 
     global TRANSPOSITION_TABLE
     TRANSPOSITION_TABLE = {}
     
-    # 使用迭代加深搜索
+    # 使用迭代加深搜索，限制最大深度为100
     best_move, best_path = iterative_deepening_search(
         game_state,
-        max_time=10.0,  # 5秒时间限制
-        verbose=verbose
+        max_time=5.0,  # 5秒时间限制
+        verbose=verbose,
+        max_depth=min(max_depth, 100)  # 确保不超过100层
     )
     
     return best_move, best_path 
