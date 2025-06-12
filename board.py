@@ -24,6 +24,12 @@ class Board:
         """判断指定格子是否为空。"""
         return self.grid[row][col] is None
 
+    def remove_card(self, row: int, col: int) -> Optional[Card]:
+        """移除指定位置的卡牌，返回被移除的卡牌，如果位置为空则返回None。"""
+        card = self.grid[row][col]
+        self.grid[row][col] = None
+        return card
+
     def available_positions(self) -> List[tuple]:
         """返回所有可用（空）格子的坐标列表。"""
         return [(r, c) for r in range(3) for c in range(3) if self.grid[r][c] is None]

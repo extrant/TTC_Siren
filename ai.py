@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Dict, List
+from typing import Tuple, Optional, Dict, List, Callable
 from game_state import GameState
 from card import Card
 import copy
@@ -18,11 +18,57 @@ HISTORY_TABLE = {}
 TIME_LIMIT = 5.0  # 默认5秒时间限制
 START_TIME = 0
 
+# 搜索统计信息
+class SearchStats:
+    def __init__(self):
+        self.reset()
+    
+    def reset(self):
+        self.nodes_searched = 0
+        self.tt_hits = 0
+        self.tt_cutoffs = 0
+        self.alpha_beta_cutoffs = 0
+        self.move_evaluations = 0
+        self.depth_completed = 0
+        self.best_score_history = []
+        self.best_move_history = []
+        self.search_time_per_depth = []
+        self.nodes_per_depth = []
+        self.branching_factors = []
+        
+    def add_depth_stats(self, depth: int, nodes: int, time_taken: float, best_score: float, best_move, branching_factor: float):
+        self.depth_completed = depth
+        self.nodes_per_depth.append(nodes)
+        self.search_time_per_depth.append(time_taken)
+        self.best_score_history.append(best_score)
+        self.best_move_history.append(best_move)
+        self.branching_factors.append(branching_factor)
+    
+    def get_summary(self) -> Dict:
+        total_time = sum(self.search_time_per_depth)
+        total_nodes = sum(self.nodes_per_depth)
+        avg_branching = sum(self.branching_factors) / len(self.branching_factors) if self.branching_factors else 0
+        
+        return {
+            'total_nodes': total_nodes,
+            'total_time': total_time,
+            'nodes_per_second': total_nodes / total_time if total_time > 0 else 0,
+            'tt_hit_rate': self.tt_hits / max(self.nodes_searched, 1),
+            'cutoff_rate': self.alpha_beta_cutoffs / max(self.nodes_searched, 1),
+            'avg_branching_factor': avg_branching,
+            'depths_completed': self.depth_completed,
+            'score_trend': self.best_score_history[-3:] if len(self.best_score_history) >= 3 else self.best_score_history
+        }
+
+# 全局搜索统计
+SEARCH_STATS = SearchStats()
+
 class SearchResult:
-    def __init__(self, eval_score: float, best_move: Optional[Tuple], path: List = None):
+    def __init__(self, eval_score: float, best_move: Optional[Tuple], path: List = None, stats: Dict = None):
         self.eval_score = eval_score
         self.best_move = best_move
         self.path = path or []
+        self.stats = stats or {}
 
 def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
@@ -227,8 +273,11 @@ def is_time_up() -> bool:
 
 def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing: bool, 
            ai_player_idx: int, verbose: bool = False, is_root: bool = False, 
-           history_table: Dict = None, path: List = None) -> SearchResult:
-    """改进的极小极大搜索"""
+           history_table: Dict = None, path: List = None, progress_callback: Callable = None) -> SearchResult:
+    """改进的极小极大搜索，使用make_move/undo_move机制避免深拷贝"""
+    global SEARCH_STATS
+    SEARCH_STATS.nodes_searched += 1
+    
     if path is None:
         path = []
     if history_table is None:
@@ -245,8 +294,10 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
     # 置换表查找
     state_hash = get_state_hash(state)
     if state_hash in TRANSPOSITION_TABLE:
+        SEARCH_STATS.tt_hits += 1
         tt_entry = TRANSPOSITION_TABLE[state_hash]
         if tt_entry['depth'] >= depth:
+            SEARCH_STATS.tt_cutoffs += 1
             return SearchResult(float(tt_entry['score']), tt_entry['move'], path)
             
     current_player = state.players[state.current_player_idx]
@@ -262,6 +313,7 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
     
     best_move = None
     best_path = []
+    moves_evaluated = 0
     
     if maximizing:
         max_eval = float('-inf')
@@ -269,20 +321,33 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
             if is_time_up():
                 break
                 
-            card, (row, col) = move
-            next_state = state.copy()
-            next_state.play_move(row, col, card)
+            moves_evaluated += 1
+            SEARCH_STATS.move_evaluations += 1
             
-            result = minimax(next_state, depth-1, alpha, beta, False, ai_player_idx, 
-                           verbose, False, history_table, path + [state.copy()])
-                           
-            if result.eval_score > max_eval:
-                max_eval = result.eval_score
-                best_move = move
-                best_path = result.path
+            card, (row, col) = move
+            
+            # 使用make_move代替深拷贝
+            move_record = state.make_move(row, col, card)
+            if move_record is None:
+                continue  # 无效移动
+            
+            try:
+                result = minimax(state, depth-1, alpha, beta, False, ai_player_idx, 
+                               verbose, False, history_table, path + [move], progress_callback)
+                               
+                if result.eval_score > max_eval:
+                    max_eval = result.eval_score
+                    best_move = move
+                    best_path = result.path
+                    
+                alpha = max(alpha, result.eval_score)
                 
-            alpha = max(alpha, result.eval_score)
+            finally:
+                # 始终撤销移动
+                state.undo_move(move_record)
+                
             if beta <= alpha:
+                SEARCH_STATS.alpha_beta_cutoffs += 1
                 # 更新历史启发表
                 if best_move:
                     card, (row, col) = best_move
@@ -297,27 +362,43 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
             'move': best_move
         }
         
-        return SearchResult(max_eval, best_move, best_path)
+        # 计算分支因子
+        branching_factor = moves_evaluated if depth > 1 else len(moves)
+        
+        return SearchResult(max_eval, best_move, best_path, {'branching_factor': branching_factor})
     else:
         min_eval = float('inf')
         for move in moves:
             if is_time_up():
                 break
                 
-            card, (row, col) = move
-            next_state = state.copy()
-            next_state.play_move(row, col, card)
+            moves_evaluated += 1
+            SEARCH_STATS.move_evaluations += 1
             
-            result = minimax(next_state, depth-1, alpha, beta, True, ai_player_idx,
-                           verbose, False, history_table, path + [state.copy()])
-                           
-            if result.eval_score < min_eval:
-                min_eval = result.eval_score
-                best_move = move
-                best_path = result.path
+            card, (row, col) = move
+            
+            # 使用make_move代替深拷贝
+            move_record = state.make_move(row, col, card)
+            if move_record is None:
+                continue  # 无效移动
+            
+            try:
+                result = minimax(state, depth-1, alpha, beta, True, ai_player_idx,
+                               verbose, False, history_table, path + [move], progress_callback)
+                               
+                if result.eval_score < min_eval:
+                    min_eval = result.eval_score
+                    best_move = move
+                    best_path = result.path
+                    
+                beta = min(beta, result.eval_score)
                 
-            beta = min(beta, result.eval_score)
+            finally:
+                # 始终撤销移动
+                state.undo_move(move_record)
+                
             if beta <= alpha:
+                SEARCH_STATS.alpha_beta_cutoffs += 1
                 # 更新历史启发表
                 if best_move:
                     card, (row, col) = best_move
@@ -332,57 +413,160 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
             'move': best_move
         }
         
-        return SearchResult(min_eval, best_move, best_path)
+        # 计算分支因子
+        branching_factor = moves_evaluated if depth > 1 else len(moves)
+        
+        return SearchResult(min_eval, best_move, best_path, {'branching_factor': branching_factor})
 
-def iterative_deepening_search(state: GameState, max_time: float, verbose: bool = False, max_depth: int = 100) -> Tuple:
-    """迭代加深搜索"""
-    global START_TIME, TIME_LIMIT
+def iterative_deepening_search(state: GameState, max_time: float, verbose: bool = False, 
+                             max_depth: int = 100, progress_callback: Callable = None) -> Tuple:
+    """增强的迭代加深搜索，包含详细进度显示"""
+    global START_TIME, TIME_LIMIT, SEARCH_STATS
     START_TIME = time.time()
     TIME_LIMIT = max_time
+    
+    # 重置搜索统计
+    SEARCH_STATS.reset()
     
     history_table = {}
     best_move = None
     best_path = []
     depth = 1
     
+    if verbose:
+        print("="*60)
+        print("开始迭代加深搜索")
+        print(f"时间限制: {max_time}秒, 最大深度: {max_depth}")
+        print("="*60)
+    
     while not is_time_up() and depth <= max_depth:
+        depth_start_time = time.time()
+        nodes_before = SEARCH_STATS.nodes_searched
+        
         if verbose:
-            print(f"\n开始深度 {depth} 的搜索...")
+            print(f"\n{'='*20} 深度 {depth} {'='*20}")
+            print(f"开始时间: {time.strftime('%H:%M:%S')}")
+            remaining_time = TIME_LIMIT - (time.time() - START_TIME)
+            print(f"剩余时间: {remaining_time:.2f}秒")
             
         result = minimax(state, depth, float('-inf'), float('inf'), True,
-                        state.current_player_idx, verbose, True, history_table)
+                        state.current_player_idx, verbose, True, history_table, progress_callback=progress_callback)
                         
+        depth_end_time = time.time()
+        depth_time = depth_end_time - depth_start_time
+        nodes_this_depth = SEARCH_STATS.nodes_searched - nodes_before
+        
+        # 检查是否超时
         if is_time_up() and depth > 1:
+            if verbose:
+                print(f"深度 {depth} 搜索超时，使用深度 {depth-1} 的结果")
             break
             
         best_move = result.best_move
         best_path = result.path
         
+        # 计算分支因子
+        branching_factor = result.stats.get('branching_factor', 0)
+        
+        # 记录深度统计
+        SEARCH_STATS.add_depth_stats(depth, nodes_this_depth, depth_time, result.eval_score, best_move, branching_factor)
+        
         if verbose:
-            print(f"深度 {depth} 完成，最佳移动：{best_move}，评分：{result.eval_score}")
+            print(f"深度 {depth} 完成:")
+            print(f"  最佳移动: {format_move_display(best_move)}")
+            print(f"  评分: {result.eval_score:.3f}")
+            print(f"  搜索节点: {nodes_this_depth:,}")
+            print(f"  用时: {depth_time:.3f}秒")
+            print(f"  节点/秒: {nodes_this_depth/depth_time:,.0f}" if depth_time > 0 else "  节点/秒: N/A")
+            print(f"  分支因子: {branching_factor:.2f}")
+            
+            # 显示搜索统计
+            tt_hit_rate = SEARCH_STATS.tt_hits / max(SEARCH_STATS.nodes_searched, 1) * 100
+            cutoff_rate = SEARCH_STATS.alpha_beta_cutoffs / max(SEARCH_STATS.nodes_searched, 1) * 100
+            print(f"  置换表命中率: {tt_hit_rate:.1f}%")
+            print(f"  α-β剪枝率: {cutoff_rate:.1f}%")
+            
+            # 显示评分趋势
+            if len(SEARCH_STATS.best_score_history) >= 2:
+                score_change = SEARCH_STATS.best_score_history[-1] - SEARCH_STATS.best_score_history[-2]
+                trend = "↑" if score_change > 0 else "↓" if score_change < 0 else "→"
+                print(f"  评分变化: {score_change:+.3f} {trend}")
+        
+        # 回调函数更新
+        if progress_callback:
+            progress_info = {
+                'depth': depth,
+                'max_depth': max_depth,
+                'best_move': best_move,
+                'best_score': result.eval_score,
+                'nodes_searched': SEARCH_STATS.nodes_searched,
+                'time_elapsed': time.time() - START_TIME,
+                'time_remaining': TIME_LIMIT - (time.time() - START_TIME),
+                'stats': SEARCH_STATS.get_summary()
+            }
+            progress_callback(progress_info)
             
         depth += 1
         
-        # 早停条件
-        if result.eval_score > 10:
-            if verbose:
-                print(f"评分过高({result.eval_score})，提前结束搜索")
-            break
-        
-        # 深度限制早停
+        # 自适应深度限制
         if depth > max_depth:
             if verbose:
                 print(f"达到最大深度限制({max_depth})，结束搜索")
             break
             
+        # 预测下一深度所需时间（更宽松的判断）
+        if depth_time > 0 and depth >= 3:  # 至少完成3层搜索再考虑时间限制
+            # 考虑置换表命中率的影响，命中率高时搜索会更快
+            tt_hit_rate = SEARCH_STATS.tt_hits / max(SEARCH_STATS.nodes_searched, 1)
+            tt_speedup_factor = 1.0 - min(tt_hit_rate * 0.3, 0.4)  # 最多40%的加速
+            
+            # 更保守的分支因子估算，考虑剪枝效果
+            effective_branching = max(branching_factor * 0.8, 2.0) if branching_factor > 1 else 2.5
+            
+            # 估算时间，考虑各种优化因素
+            base_estimation = depth_time * (effective_branching ** 1.2)  # 降低指数从1.5到1.2
+            estimated_next_time = base_estimation * tt_speedup_factor
+            
+            remaining_time = TIME_LIMIT - (time.time() - START_TIME)
+            
+            # 更宽松的缓冲时间：使用95%的剩余时间，且有最小时间保证
+            time_threshold = max(remaining_time * 0.95, 0.1)  # 预留5%缓冲时间，或至少0.1秒
+            
+            if estimated_next_time > time_threshold:
+                if verbose:
+                    print(f"预计深度 {depth} 需要 {estimated_next_time:.2f}秒，超过可用时间 {time_threshold:.2f}秒")
+                    print(f"  (分支因子: {branching_factor:.2f} → 有效: {effective_branching:.2f}, 置换表加速: {(1-tt_speedup_factor)*100:.1f}%)")
+
+            
     if verbose:
-        print(f"搜索完成，最终深度：{depth-1}")
+        print("\n" + "="*60)
+        print("搜索完成总结:")
+        summary = SEARCH_STATS.get_summary()
+        print(f"  最终深度: {SEARCH_STATS.depth_completed}")
+        print(f"  总搜索节点: {summary['total_nodes']:,}")
+        print(f"  总用时: {summary['total_time']:.3f}秒")
+        print(f"  平均节点/秒: {summary['nodes_per_second']:,.0f}")
+        print(f"  置换表命中率: {summary['tt_hit_rate']*100:.1f}%")
+        print(f"  α-β剪枝率: {summary['cutoff_rate']*100:.1f}%")
+        print(f"  平均分支因子: {summary['avg_branching_factor']:.2f}")
+        print(f"  最终最佳移动: {format_move_display(best_move)}")
+        print("="*60)
         
     return best_move, best_path
 
-def find_best_move_parallel(game_state: GameState, max_depth: int = 9, verbose: bool = False,
+def format_move_display(move):
+    """格式化移动显示"""
+    if move is None:
+        return "无移动"
+    
+    card, (row, col) = move
+    star_map = get_card_star_map()
+    star = star_map.get(card.card_id, '?')
+    return f"卡牌U{card.up}R{card.right}D{card.down}L{card.left}(★{star}) → 位置({row},{col})"
+
+def find_best_move_parallel(game_state: GameState, max_depth: int = 9, verbose: bool = False, max_time: float = 5,
                           all_cards=None, n_jobs=None, progress_callback=None, open_mode='none'):
-    """并行搜索入口"""
+    """并行搜索入口，增强进度显示"""
     # 清理全局状态
     global TRANSPOSITION_TABLE
     TRANSPOSITION_TABLE = {}
@@ -390,9 +574,10 @@ def find_best_move_parallel(game_state: GameState, max_depth: int = 9, verbose: 
     # 使用迭代加深搜索，限制最大深度为100
     best_move, best_path = iterative_deepening_search(
         game_state,
-        max_time=5.0,  # 5秒时间限制
+        max_time=max_time,  # 5秒时间限制
         verbose=verbose,
-        max_depth=min(max_depth, 100)  # 确保不超过100层
+        max_depth=min(max_depth, 100),  # 确保不超过100层
+        progress_callback=progress_callback
     )
     
     return best_move, best_path 

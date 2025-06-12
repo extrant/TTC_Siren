@@ -53,6 +53,7 @@ class UnknownCardHandler:
                              can_use: bool = True) -> List[Card]:
         """
         根据规则和游戏状态生成未知卡牌的合理估计
+        现在支持动态采样数量调整
         
         Args:
             count: 需要生成的卡牌数量
@@ -64,36 +65,83 @@ class UnknownCardHandler:
             can_use: 是否可用（秩序/混乱规则）
         """
         
-        # 限制生成数量以避免性能问题
+        # 动态调整采样数量
+        config = get_sampling_config()
         max_cards = get_max_cards_per_unknown()
-        if count > max_cards:
-            print(f"Limiting unknown card generation from {count} to {max_cards}")
-            count = max_cards
         
-        # 1. 全部记录 而不是 基础过滤：排除已使用的卡牌
-        available_cards = [card for card in self.all_cards]
+        # 性能模式下更激进地减少采样
+        if config.get('performance_mode', False):
+            # 根据未知卡牌数量动态调整
+            if count == 1:
+                # 单张未知卡牌，采样3-5张
+                max_samples = min(5, max_cards)
+            elif count <= 2:
+                # 2张未知卡牌，每张采样4-6张
+                max_samples = min(6, max_cards)
+            elif count <= 3:
+                # 3张未知卡牌，每张采样5-7张
+                max_samples = min(7, max_cards)
+            else:
+                # 更多未知卡牌，每张最多采样8张
+                max_samples = min(8, max_cards)
+                
+            # 进一步根据游戏阶段调整
+            board_occupancy = self._get_board_occupancy(board_state)
+            if board_occupancy > 0.6:  # 后期游戏，减少采样
+                max_samples = max(3, max_samples - 2)
+                
+            actual_samples = min(max_samples, max_cards)
+        else:
+            actual_samples = min(count * config.get('fallback_sample_multiplier', 2), max_cards)
         
-        if not available_cards:
-            # 如果没有可用卡牌，允许重复使用（对手可能有相同卡牌）
+        print(f"Dynamic sampling: {count} unknown cards → {actual_samples} samples (performance_mode: {config.get('performance_mode', False)})")
+        
+        # 1. 基础过滤：排除已使用的卡牌（可选）
+        if config.get('aggressive_sampling', False):
+            # 激进模式：允许重复使用（对手可能有相同卡牌）
             available_cards = self.all_cards.copy()
+        else:
+            # 保守模式：排除已使用的卡牌
+            available_cards = [card for card in self.all_cards if card.card_id not in used_cards]
+            if not available_cards:
+                available_cards = self.all_cards.copy()
         
-        # 2. 根据规则进行智能采样，考虑对手行为建模
+        # 2. 根据规则进行智能采样
+        return self._smart_sampling_by_rules(available_cards, actual_samples, rules, 
+                                           board_state, known_hand, owner, can_use)
+    
+    def _get_board_occupancy(self, board_state) -> float:
+        """计算棋盘占用率"""
+        if not board_state:
+            return 0.0
+        
+        occupied = 0
+        for r in range(3):
+            for c in range(3):
+                if board_state.get_card(r, c) is not None:
+                    occupied += 1
+        return occupied / 9.0
+    
+    def _smart_sampling_by_rules(self, available_cards: List[Card], max_samples: int,
+                                rules: List[str], board_state, known_hand: List[Card],
+                                owner: str, can_use: bool) -> List[Card]:
+        """根据规则进行智能采样"""
         # 优先处理连携类规则（同数、加算）
         if '同数' in rules:
-            return self._sample_for_same_number_rule(available_cards, count, board_state, 
+            return self._sample_for_same_number_rule(available_cards, max_samples, board_state, 
                                                     known_hand, owner, can_use)
         elif '加算' in rules:
-            return self._sample_for_addition_rule(available_cards, count, board_state,
+            return self._sample_for_addition_rule(available_cards, max_samples, board_state,
                                                  known_hand, owner, can_use)
         elif '同类强化' in rules or '同类弱化' in rules:
-            return self._sample_for_same_type_rules(available_cards, count, board_state, 
+            return self._sample_for_same_type_rules(available_cards, max_samples, board_state, 
                                                    known_hand, owner, can_use)
         elif '逆转' in rules:
-            return self._sample_for_reverse_rule(available_cards, count, owner, can_use)
+            return self._sample_for_reverse_rule(available_cards, max_samples, owner, can_use)
         elif '王牌杀手' in rules:
-            return self._sample_for_ace_killer_rule(available_cards, count, owner, can_use)
+            return self._sample_for_ace_killer_rule(available_cards, max_samples, owner, can_use)
         else:
-            return self._sample_balanced_cards(available_cards, count, owner, can_use)
+            return self._sample_balanced_cards(available_cards, max_samples, owner, can_use)
     
     def generate_opponent_cards(self, 
                               count: int,
@@ -105,6 +153,7 @@ class UnknownCardHandler:
                               can_use: bool = True) -> List[Card]:
         """
         专门为对手生成未知卡牌，考虑真实玩家的策略行为
+        现在支持动态采样数量调整
         
         Args:
             count: 需要生成的卡牌数量
@@ -116,43 +165,57 @@ class UnknownCardHandler:
             can_use: 是否可用（秩序/混乱规则）
         """
         
-        # 限制生成数量
+        # 动态调整对手卡牌采样数量（通常比己方卡牌采样更少）
+        config = get_sampling_config()
         max_cards = get_max_cards_per_unknown()
-        if count > max_cards:
-            print(f"Limiting opponent card generation from {count} to {max_cards}")
-            count = max_cards
+        
+        if config.get('performance_mode', False):
+            # 对手卡牌采样更加保守
+            if count == 1:
+                max_samples = min(4, max_cards)  # 单张对手卡牌采样4张
+            elif count <= 2:
+                max_samples = min(5, max_cards)  # 2张对手卡牌每张采样5张
+            else:
+                max_samples = min(6, max_cards)  # 更多对手卡牌每张最多采样6张
+                
+            # 对手卡牌根据游戏阶段更激进地减少采样
+            board_occupancy = self._get_board_occupancy(board_state)
+            if board_occupancy > 0.5:  # 中期开始就减少对手卡牌采样
+                max_samples = max(3, max_samples - 1)
+                
+            actual_samples = min(max_samples, max_cards)
+        else:
+            actual_samples = min(count * config.get('fallback_sample_multiplier', 2), max_cards)
+        
+        print(f"Opponent sampling: {count} unknown cards → {actual_samples} samples")
         
         # 全部卡牌可用（对手可能有重复卡牌）
-        available_cards = [card for card in self.all_cards]
-        
-        if not available_cards:
-            available_cards = self.all_cards.copy()
+        available_cards = self.all_cards.copy()
         
         # 基于规则的对手行为建模
-        config = get_sampling_config()
         if not config.get('advanced', {}).get('opponent_behavior_modeling', True):
-            # 如果未启用行为建模，回退到常规采样
-            return self.generate_unknown_cards(count, rules, used_cards, board_state, 
-                                             known_hand, owner, can_use)
+            # 如果未启用行为建模，使用简化的智能采样
+            return self._smart_sampling_by_rules(available_cards, actual_samples, rules, 
+                                               board_state, known_hand, owner, can_use)
         
         # 分析当前游戏局势，选择最符合对手策略的采样方法
         primary_rule = self._determine_primary_rule(rules)
         
         if primary_rule == '同数':
-            return self._sample_strategic_same_number_cards(available_cards, count, board_state, 
+            return self._sample_strategic_same_number_cards(available_cards, actual_samples, board_state, 
                                                           known_hand, owner, can_use, rules)
         elif primary_rule == '加算':
-            return self._sample_strategic_addition_cards(available_cards, count, board_state,
+            return self._sample_strategic_addition_cards(available_cards, actual_samples, board_state,
                                                         known_hand, owner, can_use, rules)
         elif primary_rule in ['同类强化', '同类弱化']:
-            return self._sample_strategic_same_type_cards(available_cards, count, board_state,
+            return self._sample_strategic_same_type_cards(available_cards, actual_samples, board_state,
                                                         known_hand, owner, can_use, rules)
         elif primary_rule == '逆转':
-            return self._sample_strategic_reverse_cards(available_cards, count, owner, can_use)
+            return self._sample_strategic_reverse_cards(available_cards, actual_samples, owner, can_use)
         elif primary_rule == '王牌杀手':
-            return self._sample_strategic_ace_killer_cards(available_cards, count, owner, can_use)
+            return self._sample_strategic_ace_killer_cards(available_cards, actual_samples, owner, can_use)
         else:
-            return self._sample_strategic_balanced_cards(available_cards, count, owner, can_use)
+            return self._sample_strategic_balanced_cards(available_cards, actual_samples, owner, can_use)
     
     def _determine_primary_rule(self, rules: List[str]) -> str:
         """确定主要规则，用于决定对手策略"""
@@ -232,14 +295,14 @@ class UnknownCardHandler:
         """战略性加算卡牌采样（高级对手行为）"""
         # 类似同数，但重点关注加算组合
         return self._sample_for_addition_rule(available_cards, count, board_state, 
-                                            known_hand, owner, can_use)
+                                            known_hand, owner, can_use, is_opponent=True)
     
     def _sample_strategic_same_type_cards(self, available_cards: List[Card], count: int,
                                         board_state, known_hand: List[Card],
                                         owner: str, can_use: bool, rules: List[str]) -> List[Card]:
         """战略性同类卡牌采样（考虑雪球/破坏策略）"""
         return self._sample_for_same_type_rules(available_cards, count, board_state,
-                                              known_hand, owner, can_use)
+                                              known_hand, owner, can_use, is_opponent=True)
     
     def _sample_strategic_reverse_cards(self, available_cards: List[Card], count: int,
                                       owner: str, can_use: bool) -> List[Card]:
@@ -292,7 +355,7 @@ class UnknownCardHandler:
     def _sample_strategic_balanced_cards(self, available_cards: List[Card], count: int,
                                        owner: str, can_use: bool) -> List[Card]:
         """战略性平衡卡牌采样（默认策略）"""
-        return self._sample_balanced_cards(available_cards, count, owner, can_use)
+        return self._sample_balanced_cards(available_cards, count, owner, can_use, is_opponent=True)
     
     def _is_excellent_trap_card(self, card: Card, board_state, behavior_config: Dict) -> bool:
         """判断卡牌是否为优秀的陷阱设置卡牌"""
@@ -324,7 +387,7 @@ class UnknownCardHandler:
     
     def _sample_for_same_type_rules(self, available_cards: List[Card], count: int,
                                    board_state, known_hand: List[Card], 
-                                   owner: str, can_use: bool) -> List[Card]:
+                                   owner: str, can_use: bool, is_opponent: bool = False) -> List[Card]:
         """为同类强化/弱化规则采样卡牌"""
         result = []
         
@@ -342,12 +405,12 @@ class UnknownCardHandler:
             type_cards = [card for card in available_cards 
                          if self.card_type_map.get(card.card_id) == priority_type]
             if type_cards:
-                result.extend(self._sample_cards_from_pool(type_cards, priority_count, owner, can_use))
+                result.extend(self._sample_cards_from_pool(type_cards, priority_count, owner, can_use, is_prediction=is_opponent))
         
         # 平衡分布采样
         if balanced_count > 0:
             balanced_cards = self._get_balanced_type_sample(available_cards, balanced_count)
-            result.extend(self._sample_cards_from_pool(balanced_cards, balanced_count, owner, can_use))
+            result.extend(self._sample_cards_from_pool(balanced_cards, balanced_count, owner, can_use, is_prediction=is_opponent))
         
         # 随机采样补足
         remaining = count - len(result)
@@ -355,13 +418,13 @@ class UnknownCardHandler:
             remaining_cards = [card for card in available_cards if not any(
                 card.card_id == r.card_id for r in result)]
             if remaining_cards:
-                result.extend(self._sample_cards_from_pool(remaining_cards, remaining, owner, can_use))
+                result.extend(self._sample_cards_from_pool(remaining_cards, remaining, owner, can_use, is_prediction=is_opponent))
         
         return result[:count]
     
     def _sample_for_same_number_rule(self, available_cards: List[Card], count: int,
                                     board_state, known_hand: List[Card],
-                                    owner: str, can_use: bool) -> List[Card]:
+                                    owner: str, can_use: bool, is_opponent: bool = False) -> List[Card]:
         """为同数规则采样卡牌（模拟玩家倾向于设置连携陷阱）"""
         config = get_sampling_config()
         behavior_config = config.get('opponent_behavior', {}).get('同数', {})
@@ -386,13 +449,13 @@ class UnknownCardHandler:
         
         # 连携设置卡牌
         if combo_cards and combo_count > 0:
-            result.extend(self._sample_cards_from_pool(combo_cards, combo_count, owner, can_use))
+            result.extend(self._sample_cards_from_pool(combo_cards, combo_count, owner, can_use, is_prediction=is_opponent))
         
         # 防御性卡牌
         remaining = count - len(result)
         if defensive_cards and defensive_count > 0 and remaining > 0:
             actual_defensive = min(defensive_count, remaining)
-            result.extend(self._sample_cards_from_pool(defensive_cards, actual_defensive, owner, can_use))
+            result.extend(self._sample_cards_from_pool(defensive_cards, actual_defensive, owner, can_use, is_prediction=is_opponent))
         
         # 随机补足
         remaining = count - len(result)
@@ -400,13 +463,13 @@ class UnknownCardHandler:
             remaining_cards = [card for card in available_cards 
                              if not any(card.card_id == r.card_id for r in result)]
             if remaining_cards:
-                result.extend(self._sample_cards_from_pool(remaining_cards, remaining, owner, can_use))
+                result.extend(self._sample_cards_from_pool(remaining_cards, remaining, owner, can_use, is_prediction=is_opponent))
         
         return result[:count]
     
     def _sample_for_addition_rule(self, available_cards: List[Card], count: int,
                                  board_state, known_hand: List[Card],
-                                 owner: str, can_use: bool) -> List[Card]:
+                                 owner: str, can_use: bool, is_opponent: bool = False) -> List[Card]:
         """为加算规则采样卡牌（模拟玩家倾向于设置加算连携）"""
         config = get_sampling_config()
         behavior_config = config.get('opponent_behavior', {}).get('加算', {})
@@ -427,13 +490,13 @@ class UnknownCardHandler:
         
         # 加算连携卡牌
         if sum_combo_cards and combo_count > 0:
-            result.extend(self._sample_cards_from_pool(sum_combo_cards, combo_count, owner, can_use))
+            result.extend(self._sample_cards_from_pool(sum_combo_cards, combo_count, owner, can_use, is_prediction=is_opponent))
         
         # 防御性卡牌
         remaining = count - len(result)
         if defensive_cards and defensive_count > 0 and remaining > 0:
             actual_defensive = min(defensive_count, remaining)
-            result.extend(self._sample_cards_from_pool(defensive_cards, actual_defensive, owner, can_use))
+            result.extend(self._sample_cards_from_pool(defensive_cards, actual_defensive, owner, can_use, is_prediction=is_opponent))
         
         # 随机补足
         remaining = count - len(result)
@@ -441,7 +504,7 @@ class UnknownCardHandler:
             remaining_cards = [card for card in available_cards 
                              if not any(card.card_id == r.card_id for r in result)]
             if remaining_cards:
-                result.extend(self._sample_cards_from_pool(remaining_cards, remaining, owner, can_use))
+                result.extend(self._sample_cards_from_pool(remaining_cards, remaining, owner, can_use, is_prediction=is_opponent))
         
         return result[:count]
     
@@ -454,11 +517,11 @@ class UnknownCardHandler:
     def _sample_for_ace_killer_rule(self, available_cards: List[Card], count: int,
                                    owner: str, can_use: bool) -> List[Card]:
         """为王牌杀手规则采样卡牌（偏好1和A，考虑对手策略）"""
-        # 使用增强的王牌杀手采样，考虑对手的战略性选择
-        return self._enhanced_ace_killer_sampling(available_cards, count, owner, can_use)
+        # 直接使用战略性王牌杀手采样
+        return self._sample_strategic_ace_killer_cards(available_cards, count, owner, can_use)
     
     def _sample_balanced_cards(self, available_cards: List[Card], count: int,
-                              owner: str, can_use: bool) -> List[Card]:
+                              owner: str, can_use: bool, is_opponent: bool = False) -> List[Card]:
         """平衡采样（默认策略）"""
         # 按星级分层采样
         star_distribution = {1: 0.4, 2: 0.3, 3: 0.2, 4: 0.08, 5: 0.02}
@@ -470,7 +533,7 @@ class UnknownCardHandler:
                          if self.card_star_map.get(card.card_id, 1) == star]
             
             if star_cards and star_count > 0:
-                sampled = self._sample_cards_from_pool(star_cards, star_count, owner, can_use)
+                sampled = self._sample_cards_from_pool(star_cards, star_count, owner, can_use, is_prediction=is_opponent)
                 result.extend(sampled)
                 
                 # 从available_cards中移除已采样的卡牌
@@ -481,12 +544,13 @@ class UnknownCardHandler:
         # 补足到目标数量
         remaining = count - len(result)
         if remaining > 0 and available_cards:
-            result.extend(self._sample_cards_from_pool(available_cards, remaining, owner, can_use))
+            result.extend(self._sample_cards_from_pool(available_cards, remaining, owner, can_use, is_prediction=is_opponent))
         
         return result[:count]
     
     def _sample_cards_from_pool(self, card_pool: List[Card], count: int,
-                               owner: str, can_use: bool, is_prediction: bool = False) -> List[Card]:
+                               owner: str, can_use: bool, is_prediction: bool = False, 
+                               is_opponent: bool = False) -> List[Card]:
         """从卡牌池中采样指定数量的卡牌"""
         if not card_pool:
             return []
@@ -500,9 +564,9 @@ class UnknownCardHandler:
         # 创建新的Card实例，设置正确的owner和can_use
         result = []
         for i, card in enumerate(sampled_cards):
-            # 对于预测卡牌，使用特殊ID标记（>= 1000）
+            # 对于对手预测卡牌，使用特殊ID标记（>= 1000）
             card_id = card.card_id
-            if is_prediction:
+            if is_opponent or is_prediction:
                 card_id = 1000 + (card.card_id % 1000)  # 确保ID >= 1000
             
             new_card = Card(
@@ -515,6 +579,10 @@ class UnknownCardHandler:
                 card_type=card.card_type,
                 can_use=can_use
             )
+            # 标记为生成的卡牌（用于区分真实已知和AI预测）
+            if is_opponent or is_prediction:
+                new_card._is_generated = True
+                new_card._is_prediction = True
             result.append(new_card)
         
         return result
