@@ -7,9 +7,9 @@
 import random
 import numpy as np
 from typing import List, Set, Dict, Optional, Tuple
-from card import Card
+from core.card import Card
 from collections import defaultdict, Counter
-from unknown_card_config import get_sampling_config, get_debug_config, get_max_cards_per_unknown
+from config.unknown_card_config import get_sampling_config, get_debug_config, get_max_cards_per_unknown
 
 
 class UnknownCardHandler:

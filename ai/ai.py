@@ -1,6 +1,6 @@
 from typing import Tuple, Optional, Dict, List, Callable
-from game_state import GameState
-from card import Card
+from core.game_state import GameState
+from core.card import Card
 import copy
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -78,7 +78,7 @@ def resource_path(relative_path):
 # 懒加载卡牌星级映射
 def get_card_star_map():
     if not hasattr(get_card_star_map, '_cache'):
-        df = pd.read_csv(resource_path('幻卡数据库.csv'))
+        df = pd.read_csv(resource_path('data/幻卡数据库.csv'))
         get_card_star_map._cache = {int(row['序号']): int(row['星级']) for _, row in df.iterrows()}
     return get_card_star_map._cache
 

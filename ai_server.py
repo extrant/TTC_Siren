@@ -1,11 +1,11 @@
 from flask import Flask, request, jsonify
 import pandas as pd
-from card import Card
-from player import Player
-from board import Board
-from game_state import GameState
-from ai import find_best_move_parallel
-from unknown_card_handler import initialize_unknown_card_handler, get_unknown_card_handler
+from core.card import Card
+from core.player import Player
+from core.board import Board
+from core.game_state import GameState
+from ai.ai import find_best_move_parallel
+from ai.unknown_card_handler import initialize_unknown_card_handler, get_unknown_card_handler
 import os
 import codecs
 import threading
@@ -25,7 +25,7 @@ def get_card_db():
     if _card_db is None:
         with _card_lock:
             if _card_db is None:
-                _card_db = pd.read_csv('幻卡数据库.csv')
+                _card_db = pd.read_csv('data/幻卡数据库.csv')
     return _card_db
 
 def get_all_cards():
@@ -1024,7 +1024,7 @@ def ai_move():
         my_hand = parse_hand(data['myHand'], my_owner, used_cards, rules, board, is_opponent=False)
         opp_hand = parse_hand(data['oppHand'], opp_owner, used_cards, rules, board, is_opponent=True)
         # 玩家顺序
-        from player import Player
+        from core.player import Player
         if my_owner == 'red':
             players = [Player('me', my_hand), Player('opp', opp_hand)]
             current_player_idx = 0
@@ -1114,7 +1114,7 @@ def ai_move():
         print(new_state.board)
         
         # 性能统计
-        from ai import SEARCH_STATS
+        from ai.ai import SEARCH_STATS
         performance_stats = {
             'nodes_searched': SEARCH_STATS.nodes_searched,
             'search_depth': SEARCH_STATS.depth_completed,
@@ -1222,4 +1222,67 @@ def get_search_progress():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000)
+    import os
+    import sys
+    
+    # 定义字符画 - 你可以在这里替换为你准备好的字符画
+    # ASCII_ART = """TTC_Siren"""
+    # 例如，你可以替换为类似这样的字符画：
+    ASCII_ART = '''
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⣤⣤⣤⣤⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⣴⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡆⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⢀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⣸⣿⣿⣿⣿⣿⣿⣿⣿⠁⠈⣿⠾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⣿⠃⣿⣿⣿⣿⢿⣿⣿⣿⣿⣿⣿⣿⡿⣧⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠸⣿⣿⣿⣿⣿⣻⣿⣼⠤⣤⠼⠵⣿⠟⠻⢿⢾⡿⠧⢽⣿⣿⣿⣿⡇⠙⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢿⣿⡟⣿⡏⢓⣟⣶⣶⣾⠗⠀⠀⠀⠄⠺⢿⣶⣶⡞⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠘⣿⣿⣌⣇⠀⠈⠉⠉⠀⠀⢀⠠⠀⢀⠀⠈⠉⠉⠀⣿⣿⣿⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠰⠻⣿⣿⣿⣄⠀⠀⠐⠀⠀⠂⠀⠠⠀⢀⠠⠀⠀⢠⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⡿⢿⡿⢧⡀⠄⠀⠁⢀⣙⣀⡁⠀⠀⢀⡼⠛⣿⣿⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠁⠀⠁⢰⣿⣶⣦⣄⣀⠀⠀⡀⣠⣼⣾⣷⠄⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⠴⣾⣿⣿⣿⣿⣿⣶⣯⣷⣿⣿⣿⣿⣿⡗⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⣀⠔⣫⠦⣹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡷⣿⣿⡣⢄⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⢀⡠⠒⠉⠀⠀⢹⡜⡥⣚⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡙⣿⣿⠏⠀⠉⠢⢄⡀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⡸⠤⠤⢤⣀⣀⡸⢎⡵⣘⠮⣝⣿⣿⣿⣿⣿⣿⣿⣿⡿⢥⢛⣼⡏⠀⢀⣠⠴⠊⠙⢄⠀⠀⠀⠀
+⠀⠀⢀⠎⠀⠰⣆⠀⠀⠈⠉⠚⡦⢷⢾⣔⣭⣿⣿⣿⣿⣿⣿⣟⣬⠷⢮⢾⠓⠊⠉⠀⠀⢠⠆⠘⡆⠀⠀⠀
+⠀⠀⡎⠀⠀⡀⠘⢆⠀⠀⠀⠄⠻⣜⠲⣎⢼⣿⣿⣿⣿⣿⣿⣾⣥⢛⡜⡾⠀⢀⠐⠀⠀⡞⠀⠀⢷⠀⠀⠀
+⠀⠀⡇⠀⠠⠀⠀⠈⢷⡀⠀⢀⠀⠹⡗⡜⣎⠶⣹⣿⣿⣿⣿⢎⡱⣋⡼⠃⠀⢀⠀⠀⣰⠃⢀⠠⢸⡄⠀⠀
+⠀⠀⡇⠀⠀⠄⠂⠀⠀⢳⠀⠀⠀⠀⠘⢷⡘⢮⣽⣿⣿⣿⣿⣌⢧⡝⠁⠀⠀⠄⠀⢠⠏⠀⠀⡀⠀⡇⠀⠀
+⠀⠀⡇⠀⠂⡀⠐⢀⠀⠘⡆⠀⠁⠀⠄⠀⠙⠛⠻⣿⣿⣿⠋⠛⠋⠀⠀⠈⠀⢀⠀⡞⠀⠀⠠⠀⠀⢳⠀⠀
+⠀⠀⡇⠀⠠⠀⢠⡀⠀⠀⢻⠀⠀⠁⡀⠌⠀⠀⠀⢿⣿⡟⠀⠀⠠⠀⠐⠀⠁⠀⡼⠁⠀⠠⠁⠀⠀⣹⠀⠀
+⠀⢠⠇⠀⠠⠀⠀⢣⡐⠀⠘⡇⠀⠐⠀⠀⠄⠀⠾⢿⣿⡇⢠⣤⠀⠀⠂⠀⡀⣸⠁⠀⠀⠂⠀⠁⠀⡜⠀⠀
+⠀⢸⠀⠀⠐⢀⠀⠈⣧⠀⠀⢻⡀⠀⠐⠀⠠⢀⠀⢸⣿⡇⠈⠁⠀⢀⠂⠀⢠⠏⠀⠠⠐⠀⠈⢠⠆⣛⠀⠀
+⠀⢸⠀⠈⢀⠀⠠⠀⠸⣆⠀⠈⣧⠐⠀⢈⠀⠀⡀⢼⣿⡇⣠⣀⠀⢀⠠⠀⡟⠀⠀⠠⠀⠠⢠⠎⡗⢸⠀⠀
+⠀⣼⠀⢁⠂⡀⠂⠠⠀⢻⡄⠀⠸⡇⠀⠀⠀⠻⠟⣿⣿⣿⠈⠋⠀⠀⡀⣼⢡⡇⠀⠀⠀⢤⠏⢸⠃⢸⡀⠀
+⠀⣯⠀⢂⠲⣄⠂⡁⠂⢈⣧⠀⢀⢻⡀⠂⢁⠠⢸⣿⣿⣿⣷⡀⣠⣁⠀⢻⣼⠀⠠⠀⣬⠏⢠⠏⠀⡈⡇⠀ ████████ ████████  ██████     ███████ ██ ██████  ███████ ███    ██ 
+⠀⡇⡐⢀⠂⠌⢷⠀⠡⢀⠘⣇⠠⢸⡇⠈⠄⠠⣹⣿⣿⣿⣿⣷⣉⠡⠀⢢⠏⠀⢠⡼⠃⢀⡞⢀⠐⡀⢷⠀    ██       ██    ██          ██      ██ ██   ██ ██      ████   ██ 
+⠠⡗⡈⠷⣈⠰⢈⠻⣆⠂⠌⠹⣆⢼⢋⠐⡘⢛⣿⣿⣿⣿⣿⣿⣿⠠⠁⣾⠀⣼⠋⠄⡐⣸⠃⠄⠂⠌⢸⠀    ██       ██    ██          ███████ ██ ██████  █████   ██ ██  ██ 
+⠀⣷⡈⡔⠩⠳⣦⢈⠹⢿⣬⡐⠙⣾⢀⠣⠠⢭⣿⣿⣿⣿⣿⣿⣿⠻⢃⣧⠟⢡⠈⡐⣰⠏⡐⣈⠐⡨⣼⡀    ██       ██    ██               ██ ██ ██   ██ ██      ██  ██ ██ 
+⠀⠸⡇⠬⣁⠣⡐⠢⢌⠢⡙⢿⣔⡹⣇⠴⠿⣿⣿⣿⣿⣿⣿⣿⣿⢡⣿⠁⢎⠠⡑⢠⡯⠐⡰⠀⠎⣡⣿⡇    ██       ██     ██████     ███████ ██ ██   ██ ███████ ██   ████ 
+A Final Fantasy 14 Triple Triad Solver, Using MinMax algorithm and Alpha-Beta pruning. 
+If you are willing to provide assistance for my project, welcome!
+https://github.com/extrant/TTC_Siren
+     '''
+    
+    # 清除之前的输出并显示字符画
+    os.system('title TTC_Siren - Triple Triad AI Server')
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print(ASCII_ART)
+    
+    # 抑制Flask的启动信息
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
+    # 启动应用，使用threaded=True减少警告
+    try:
+        print(" * Running on http://127.0.0.1:5000")
+        print("Press CTRL+C to quit")
+        app.run(host='127.0.0.1', port=5000, threaded=True, use_reloader=False)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        sys.exit(0)

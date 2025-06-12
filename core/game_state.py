@@ -1,7 +1,7 @@
 from typing import List, Optional
-from board import Board
-from player import Player
-from card import Card
+from .board import Board
+from .player import Player
+from .card import Card
 import copy
 
 class MoveRecord:
