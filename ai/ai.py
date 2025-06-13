@@ -3,13 +3,21 @@ from core.game_state import GameState
 from core.card import Card
 import copy
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 import pandas as pd
 import random
 import math
 import time
+# 新增导入: 获取全局 UnknownCardHandler 以复用其角落评分逻辑
+try:
+    from ai.unknown_card_handler import get_unknown_card_handler  # type: ignore
+except Exception:
+    # 兼容运行时尚未初始化或包路径问题
+    def get_unknown_card_handler():
+        return None
 
+# 角落策略评分的全局权重，可根据实际效果调节
+CORNER_STRATEGY_WEIGHT = 5.0
 
 TRANSPOSITION_TABLE = {}
 
@@ -100,6 +108,12 @@ def evaluate_state(state: GameState, ai_player_idx: int) -> float:
     }
     
     position_score = 0
+    corner_edge_score = 0.0  # 新增：角落边值综合评分
+    handler = None
+    try:
+        handler = get_unknown_card_handler()
+    except Exception:
+        pass
     for r in range(3):
         for c in range(3):
             card = state.board.get_card(r, c)
@@ -108,10 +122,24 @@ def evaluate_state(state: GameState, ai_player_idx: int) -> float:
                 if (card.owner == 'red' and ai_player_idx == 0) or \
                    (card.owner == 'blue' and ai_player_idx == 1):
                     position_score += weight
+                    # 角落边值加分（仅己方卡牌）
+                    if handler and (r, c) in [(0,0),(0,2),(2,0),(2,2)]:
+                        try:
+                            cs = handler._calculate_corner_strategy_score(card, state.board)
+                            corner_edge_score += cs * (CORNER_STRATEGY_WEIGHT * 0.6)  # 在总评估中权重稍低
+                        except Exception:
+                            pass
                 else:
                     position_score -= weight
+                    # 对手角落高边则扣分
+                    if handler and (r, c) in [(0,0),(0,2),(2,0),(2,2)]:
+                        try:
+                            cs = handler._calculate_corner_strategy_score(card, state.board)
+                            corner_edge_score -= cs * (CORNER_STRATEGY_WEIGHT * 0.6)
+                        except Exception:
+                            pass
     
-    return base_score * 0.7 + position_score * 0.3
+    return base_score * 0.7 + position_score * 0.3 + corner_edge_score * 0.1
 
 
 """
@@ -252,7 +280,17 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
             adj_card = state.board.get_card(nr, nc)
             if adj_card and adj_card.owner == card.owner:
                 score += 10.0  # 相邻己方卡牌
-    
+
+    # 6. 角落/高边战略评分 (新增)
+    try:
+        handler = get_unknown_card_handler()
+        if handler and hasattr(handler, "_calculate_corner_strategy_score"):
+            corner_score = handler._calculate_corner_strategy_score(card, state.board)
+            score += corner_score * CORNER_STRATEGY_WEIGHT
+    except Exception:
+        # 若处理器未初始化或计算失败，忽略该评分
+        pass
+
     return float(min(score, 1000.0))  # 确保最终分数不会过大
 
 def order_moves(moves: List[Tuple], state: GameState, history_table: Dict) -> List[Tuple]:

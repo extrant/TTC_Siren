@@ -1555,6 +1555,7 @@ if __name__ == '__main__':
 ⠀⣷⡈⡔⠩⠳⣦⢈⠹⢿⣬⡐⠙⣾⢀⠣⠠⢭⣿⣿⣿⣿⣿⣿⣿⠻⢃⣧⠟⢡⠈⡐⣰⠏⡐⣈⠐⡨⣼⡀    ██       ██    ██               ██ ██ ██   ██ ██      ██  ██ ██ 
 ⠀⠸⡇⠬⣁⠣⡐⠢⢌⠢⡙⢿⣔⡹⣇⠴⠿⣿⣿⣿⣿⣿⣿⣿⣿⢡⣿⠁⢎⠠⡑⢠⡯⠐⡰⠀⠎⣡⣿⡇    ██       ██     ██████     ███████ ██ ██   ██ ███████ ██   ████ 
 A Final Fantasy 14 Triple Triad Solver, Using MinMax algorithm and Alpha-Beta pruning. 
+This is just a very simple demo. win rate cannot be guaranteed!
 If you are willing to provide assistance for my project, welcome!
 https://github.com/extrant/TTC_Siren
      '''

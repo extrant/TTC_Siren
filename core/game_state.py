@@ -320,6 +320,12 @@ class GameState:
         # 2. 统计所有手牌中的卡牌类型（包括已知和未知）
         for player in self.players:
             for hand_card in player.hand:
+                # 过滤掉AI预测的卡牌（_is_prediction 或 _is_generated 标记）和空白未知占位卡牌
+                if getattr(hand_card, "_is_prediction", False) or getattr(hand_card, "_is_generated", False):
+                    continue
+                if hand_card.up == 0 and hand_card.right == 0 and hand_card.down == 0 and hand_card.left == 0:
+                    # 原始未知卡牌占位（全0），不计入同类统计
+                    continue
                 if hand_card.card_type:
                     type_counts[hand_card.card_type] = type_counts.get(hand_card.card_type, 0) + 1
         
@@ -355,14 +361,11 @@ class GameState:
         智能推测未知手牌可能包含的卡牌类型
         基于已知信息、游戏规则和统计学原理
         """
-        # 统计未知卡牌数量
+        # 统计未知卡牌数量（仅计算真正未知的占位卡，而非AI预测卡）
         unknown_count = 0
         for player in self.players:
             for hand_card in player.hand:
-                # 检查是否为未知卡牌（全0或AI生成的预测卡牌）
-                if (hand_card.up == 0 and hand_card.right == 0 and 
-                    hand_card.down == 0 and hand_card.left == 0) or \
-                   getattr(hand_card, '_is_prediction', False):
+                if (hand_card.up == 0 and hand_card.right == 0 and hand_card.down == 0 and hand_card.left == 0):
                     unknown_count += 1
         
         if unknown_count == 0:

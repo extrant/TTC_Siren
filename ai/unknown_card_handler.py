@@ -310,7 +310,7 @@ class UnknownCardHandler:
         # 3. 根据剩余星级配额调整策略
         return self._sample_for_draft_rule(available_cards, count, board_state,
                                          known_hand, owner, can_use, rules)
-
+    
     def _sample_strategic_addition_cards(self, available_cards: List[Card], count: int,
                                        board_state, known_hand: List[Card],
                                        owner: str, can_use: bool, rules: List[str]) -> List[Card]:
