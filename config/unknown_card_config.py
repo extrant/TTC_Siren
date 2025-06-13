@@ -6,8 +6,8 @@
 # 采样策略配置
 SAMPLING_CONFIG = {
     # 基础配置 - 大幅减少采样数量
-    'max_unknown_cards_per_hand': 50,  # 每个未知手牌最多生成的卡牌数量
-    'fallback_sample_multiplier': 3,   # 回退策略的采样倍数
+    'max_unknown_cards_per_hand': 150,  # 每个未知手牌最多生成的卡牌数量
+    'fallback_sample_multiplier': 5,   # 回退策略的采样倍数
     
     # 性能优化配置
     'performance_mode': False,           # 启用性能模式
