@@ -241,6 +241,8 @@ def parse_rules_and_open_mode(rules_str):
         rules.append('秩序')
     if '混乱' in rules_str:
         rules.append('混乱')
+    if '选拔' in rules_str:
+        rules.append('选拔')
 
     # 允许最多4条规则
     # 可按逗号分割后去重
@@ -324,6 +326,13 @@ def analyze_opponent_hand(opp_hand, rules, board):
     # 分析未知卡牌策略
     strategy_analysis = analyze_opponent_strategy(rules, board, known_cards)
     
+    # 选拔规则特殊分析
+    draft_analysis = None
+    if '选拔' in rules:
+        draft_analysis = analyze_draft_mode_constraints(opp_hand, board, rules)
+        if draft_analysis:
+            strategy_analysis += f" | 选拔分析：{draft_analysis}"
+    
     # 如果还有未处理的未知卡牌，生成通用预测
     remaining_unknown = unknown_count - len(predicted_cards)
     if remaining_unknown > 0:
@@ -333,16 +342,27 @@ def analyze_opponent_hand(opp_hand, rules, board):
     # 合并所有卡牌信息
     all_cards = known_cards + predicted_cards
     
-    return {
+    result = {
         'predicted_cards': all_cards[:10],  # 最多显示10张
         'total_unknown': unknown_count,
         'strategy_analysis': strategy_analysis
     }
+    
+    # 如果有选拔规则，添加星级分析
+    if '选拔' in rules and draft_analysis:
+        result['draft_analysis'] = draft_analysis
+    
+    return result
 
 def get_prediction_confidence(card, rules):
     """根据规则和卡牌特征计算预测置信度（支持多规则组合）"""
     confidence = 0.6  # 基础置信度
     rule_bonuses = []  # 记录各规则的置信度加成
+    
+    # 选拔规则优先级最高
+    if '选拔' in rules:
+        # 选拔规则下，星级匹配的置信度很高
+        rule_bonuses.append(0.85)
     
     # 连携类规则优先级最高
     if '同数' in rules and has_same_number_potential(card):
@@ -405,6 +425,19 @@ def get_prediction_reasoning(card, rules):
     """根据规则和卡牌特征生成预测原因"""
     reasons = []
     
+    # 选拔规则分析
+    if '选拔' in rules:
+        star_map = get_card_star_map()
+        star = star_map.get(card.card_id, '?')
+        if star == 5:
+            reasons.append('选拔模式下的5星王牌，战略价值极高')
+        elif star == 4:
+            reasons.append('选拔模式下的4星强力卡牌，关键时刻的选择')
+        elif star in [1, 2]:
+            reasons.append('选拔模式下的低星级卡牌，早期使用较安全')
+        else:
+            reasons.append('选拔模式下的中等星级卡牌，平衡性较好')
+    
     # 连携类规则分析
     if '同数' in rules and has_same_number_potential(card):
         if '加算' in rules and has_addition_potential(card):
@@ -445,9 +478,107 @@ def get_prediction_reasoning(card, rules):
     
     return '；'.join(reasons)
 
+def analyze_global_star_usage(board, my_hand_json, opp_hand_json):
+    """分析全局星级使用情况（包括棋盘和所有已知手牌）"""
+    star_map = get_card_star_map()
+    type_map = get_card_type_map()
+    global_usage = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    
+    # 统计棋盘卡牌
+    if board:
+        for r in range(3):
+            for c in range(3):
+                card = board.get_card(r, c)
+                if card and hasattr(card, 'card_id') and card.card_id:
+                    star = star_map.get(card.card_id, 1)
+                    global_usage[star] += 1
+    
+    # 统计己方已知手牌
+    for item in my_hand_json:
+        if not all([item[k] == 0 for k in ['numU', 'numR', 'numD', 'numL']]):
+            up, right, down, left = item['numU'], item['numL'], item['numD'], item['numR']
+            card_id = find_card_id_by_stats(up, right, down, left)
+            if card_id:
+                star = star_map.get(card_id, 1)
+                global_usage[star] += 1
+    
+    # 统计对手已知手牌
+    for item in opp_hand_json:
+        if not all([item[k] == 0 for k in ['numU', 'numR', 'numD', 'numL']]):
+            up, right, down, left = item['numU'], item['numL'], item['numD'], item['numR']
+            card_id = find_card_id_by_stats(up, right, down, left)
+            if card_id:
+                star = star_map.get(card_id, 1)
+                global_usage[star] += 1
+    
+    return global_usage
+
+def analyze_draft_mode_constraints(all_hand, board, rules):
+    """分析选拔模式下的星级约束"""
+    star_map = get_card_star_map()
+    
+    # 统计全局星级使用情况
+    global_star_usage = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    
+    # 统计棋盘上的卡牌
+    if board:
+        for r in range(3):
+            for c in range(3):
+                card = board.get_card(r, c)
+                if card and hasattr(card, 'card_id') and card.card_id:
+                    star = star_map.get(card.card_id, 1)
+                    global_star_usage[star] += 1
+    
+    # 统计手牌中的已知卡牌
+    if all_hand:
+        for card in all_hand:
+            # 只统计有效的已知卡牌
+            if (hasattr(card, 'card_id') and card.card_id and card.card_id > 0 and
+                not (card.up == 0 and card.right == 0 and card.down == 0 and card.left == 0)):
+                star = star_map.get(card.card_id, 1)
+                global_star_usage[star] += 1
+    
+    # 计算剩余配额
+    star_limits = {1: 2, 2: 2, 3: 2, 4: 2, 5: 2}
+    remaining_quota = {}
+    for star, limit in star_limits.items():
+        used = global_star_usage.get(star, 0)
+        remaining = max(0, limit - used)
+        remaining_quota[star] = remaining
+    
+    # 生成分析报告
+    analysis_parts = []
+    
+    # 检查是否有星级用完
+    exhausted_stars = [str(star) for star, quota in remaining_quota.items() if quota == 0]
+    if exhausted_stars:
+        analysis_parts.append(f"{','.join(exhausted_stars)}星已用完")
+    
+    # 检查剩余高价值星级
+    high_value_remaining = remaining_quota.get(4, 0) + remaining_quota.get(5, 0)
+    if high_value_remaining > 0:
+        analysis_parts.append(f"剩余{high_value_remaining}张高星卡牌")
+    
+    # 检查可用星级分布
+    available_stars = [str(star) for star, quota in remaining_quota.items() if quota > 0]
+    if available_stars:
+        analysis_parts.append(f"可用星级:{','.join(available_stars)}")
+    
+    # 战略建议
+    if remaining_quota.get(5, 0) > 0:
+        analysis_parts.append("对手可能保留5星卡牌作为杀招")
+    elif remaining_quota.get(4, 0) > 0:
+        analysis_parts.append("对手可能依赖4星卡牌")
+    
+    return ' | '.join(analysis_parts) if analysis_parts else "星级分布正常"
+
 def analyze_opponent_strategy(rules, board, known_cards):
     """分析对手策略"""
     strategies = []
+    
+    # 选拔规则优先分析
+    if '选拔' in rules:
+        strategies.append('严格控制星级配额，注意高星卡牌的战略性使用')
     
     # 检查连携类规则（最重要）
     if '同数' in rules and '加算' in rules:
@@ -475,6 +606,14 @@ def analyze_opponent_strategy(rules, board, known_cards):
 def predict_unknown_cards(rules, board, count):
     """预测未知卡牌"""
     predictions = []
+    
+    # 选拔规则优先处理
+    if '选拔' in rules:
+        predictions.append({
+            'card': '根据星级配额的战略性卡牌',
+            'confidence': 0.85,
+            'reasoning': '选拔模式下严格按照星级配额进行卡牌选择'
+        })
     
     # 基于规则生成预测（支持多规则组合）
     if '同数' in rules and '加算' in rules:
@@ -827,7 +966,12 @@ def analyze_strategic_value(game_state, move, my_owner):
     if (row, col) == (1, 1):
         strategies.append("控制中心战略位置")
     elif (row, col) in [(0,0), (0,2), (2,0), (2,2)]:
-        strategies.append("占据防御要塞")
+        # 增强的边角战略评估
+        corner_analysis = analyze_corner_strategy(card, (row, col), board)
+        if corner_analysis:
+            strategies.append(f"占据防御要塞：{corner_analysis}")
+        else:
+            strategies.append("占据防御要塞")
     elif (row, col) in [(0,1), (1,0), (1,2), (2,1)]:
         strategies.append("控制边缘要道")
     
@@ -998,6 +1142,146 @@ def _print_type_analysis(game_state):
         modifier = count - 1 if '同类强化' in game_state.rules else -(count - 1)
         print(f"  {card_type}: {count}张 → {rule_type}{modifier:+d}")
 
+def analyze_corner_strategy(card, position, board):
+    """
+    分析边角放置战略价值
+    针对高数值边角落放置的特殊评估
+    """
+    row, col = position
+    values = [card.up, card.right, card.down, card.left]  # U, R, D, L
+    analysis_parts = []
+    
+    # 识别高数值边
+    high_values = [v for v in values if v >= 8]
+    very_high_values = [v for v in values if v >= 9]
+    ace_values = [v for v in values if v == 10]  # A值
+    low_values = [v for v in values if v <= 4]
+    
+    # 特殊AA组合检测
+    ace_positions = [i for i, v in enumerate(values) if v == 10]
+    if len(ace_positions) >= 2:
+        # 检查是否是最优AA组合
+        if (row == 2 and col == 2 and 1 in ace_positions and 3 in ace_positions):  # 右下角: R+L=AA
+            analysis_parts.append("最优AA右下角组合")
+        elif (row == 2 and col == 0 and 1 in ace_positions and 0 in ace_positions):  # 左下角: R+U=AA  
+            analysis_parts.append("次优AA左下角组合")
+        elif (row == 0 and col == 2 and 2 in ace_positions and 3 in ace_positions):  # 右上角: D+L=AA
+            analysis_parts.append("优质AA右上角组合")
+        elif (row == 0 and col == 0 and 1 in ace_positions and 2 in ace_positions):  # 左上角: R+D=AA
+            analysis_parts.append("平衡AA左上角组合")
+        elif len(ace_positions) >= 2:
+            analysis_parts.append(f"{len(ace_positions)}边AA优势组合")
+    
+    # 三边高数值组合分析 (如右下左为9或8的卡牌)
+    if len(high_values) >= 3:
+        if len(very_high_values) >= 3:
+            analysis_parts.append("三边9+超强角落控制")
+        else:
+            analysis_parts.append("三边8+强力角落控制")
+        
+        # 检查弱势边保护
+        if len(low_values) >= 1:
+            weak_sides = [['上', '右', '下', '左'][i] for i, v in enumerate(values) if v <= 4]
+            analysis_parts.append(f"保护{'/'.join(weak_sides)}弱势边")
+    
+    # 双边高数值分析
+    elif len(high_values) >= 2:
+        high_positions = [i for i, v in enumerate(values) if v >= 8]
+        
+        # 检查高数值边的相邻性
+        if are_adjacent_positions(high_positions):
+            side_names = get_side_names(high_positions)
+            analysis_parts.append(f"相邻{'/'.join(side_names)}高数值控制")
+        else:
+            analysis_parts.append("双边高数值防护")
+    
+    # 分析当前位置的边暴露情况
+    exposed_sides = get_exposed_sides(row, col)
+    if exposed_sides:
+        exposed_values = [values[i] for i in exposed_sides]
+        if any(v <= 3 for v in exposed_values):
+            # 有弱势边暴露的警告
+            weak_exposed = [['上', '右', '下', '左'][i] for i in exposed_sides if values[i] <= 3]
+            analysis_parts.append(f"警告：{'/'.join(weak_exposed)}边存在弱点")
+        elif all(v >= 8 for v in exposed_values):
+            # 所有暴露边都是高值
+            strong_exposed = [['上', '右', '下', '左'][i] for i in exposed_sides]
+            analysis_parts.append(f"{'/'.join(strong_exposed)}边强力防护")
+    
+    # 特殊情况：极端数值差异卡牌的角落适配性
+    min_val, max_val = min(values), max(values)
+    if max_val - min_val >= 7:  # 如1,9,9,9这样的卡牌
+        if len(low_values) == 1:
+            weak_side = ['上', '右', '下', '左'][values.index(min_val)]
+            analysis_parts.append(f"隐藏{weak_side}边弱点(值{min_val})")
+    
+    # 分析相邻已放置卡牌的协同效果
+    adjacent_synergy = analyze_adjacent_synergy(card, row, col, board)
+    if adjacent_synergy:
+        analysis_parts.append(adjacent_synergy)
+    
+    return '，'.join(analysis_parts) if analysis_parts else None
+
+def are_adjacent_positions(positions):
+    """检查位置列表中是否有相邻的位置"""
+    if len(positions) < 2:
+        return False
+    # 边的相邻关系: 0(上)-1(右), 1(右)-2(下), 2(下)-3(左), 3(左)-0(上)
+    adjacency = {0: [1, 3], 1: [0, 2], 2: [1, 3], 3: [0, 2]}
+    
+    for i, pos1 in enumerate(positions):
+        for pos2 in positions[i+1:]:
+            if pos2 in adjacency[pos1]:
+                return True
+    return False
+
+def get_side_names(positions):
+    """获取位置对应的边名称"""
+    side_map = {0: '上', 1: '右', 2: '下', 3: '左'}
+    return [side_map[pos] for pos in positions]
+
+def get_exposed_sides(row, col):
+    """获取在该位置会暴露的边（不靠墙的边）"""
+    exposed = []
+    
+    # 检查每条边是否暴露
+    if row > 0:  # 上边暴露
+        exposed.append(0)
+    if col < 2:  # 右边暴露  
+        exposed.append(1)
+    if row < 2:  # 下边暴露
+        exposed.append(2)
+    if col > 0:  # 左边暴露
+        exposed.append(3)
+        
+    return exposed
+
+def analyze_adjacent_synergy(card, row, col, board):
+    """分析与相邻卡牌的协同效果"""
+    synergy_effects = []
+    values = [card.up, card.right, card.down, card.left]
+    
+    # 检查四个方向的相邻卡牌
+    directions = [(-1, 0, 0, 2), (0, 1, 1, 3), (1, 0, 2, 0), (0, -1, 3, 1)]  # (dr, dc, my_side, adj_side)
+    
+    for dr, dc, my_side, adj_side in directions:
+        nr, nc = row + dr, col + dc
+        if 0 <= nr < 3 and 0 <= nc < 3:
+            adj_card = board.get_card(nr, nc)
+            if adj_card:
+                my_value = values[my_side]
+                adj_value = getattr(adj_card, ['up', 'right', 'down', 'left'][adj_side])
+                
+                # 检查数值匹配度
+                if my_value == adj_value and my_value >= 8:
+                    side_name = ['上', '右', '下', '左'][my_side]
+                    synergy_effects.append(f"{side_name}边与邻牌高值匹配({my_value})")
+                elif my_value + adj_value == 10 and min(my_value, adj_value) >= 4:
+                    side_name = ['上', '右', '下', '左'][my_side]
+                    synergy_effects.append(f"{side_name}边与邻牌互补({my_value}+{adj_value}=10)")
+    
+    return '，'.join(synergy_effects) if synergy_effects else None
+
 app = Flask(__name__)
 
 @app.route('/ai_move', methods=['POST'])
@@ -1019,6 +1303,13 @@ def ai_move():
         
         # 先解析规则，然后用于智能手牌处理
         rules, open_mode = parse_rules_and_open_mode(data.get('rules', ''))
+        
+        # 选拔规则特殊处理：需要全局统计星级使用情况
+        if '选拔' in rules:
+            print("检测到选拔规则，启动全局星级约束分析")
+            # 先统计棋盘和已知手牌的星级使用情况
+            global_star_usage = analyze_global_star_usage(board, data['myHand'], data['oppHand'])
+            print(f"全局星级使用情况: {global_star_usage}")
         
         # 使用智能手牌解析，对对手手牌启用行为建模
         my_hand = parse_hand(data['myHand'], my_owner, used_cards, rules, board, is_opponent=False)

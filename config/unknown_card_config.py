@@ -6,14 +6,14 @@
 # 采样策略配置
 SAMPLING_CONFIG = {
     # 基础配置 - 大幅减少采样数量
-    'max_unknown_cards_per_hand': 20,  # 从50减少到10，每个未知手牌最多生成的卡牌数量
-    'fallback_sample_multiplier': 3,   # 从3减少到2，回退策略的采样倍数
+    'max_unknown_cards_per_hand': 50,  # 每个未知手牌最多生成的卡牌数量
+    'fallback_sample_multiplier': 3,   # 回退策略的采样倍数
     
     # 性能优化配置
-    'performance_mode': True,           # 启用性能模式
-    'aggressive_sampling': True,        # 激进采样模式
-    'min_samples_per_unknown': 3,       # 每个未知卡牌的最小采样数
-    'max_samples_per_unknown': 8,       # 每个未知卡牌的最大采样数
+    'performance_mode': False,           # 启用性能模式
+    'aggressive_sampling': False,        # 激进采样模式
+    'min_samples_per_unknown': 5,       # 每个未知卡牌的最小采样数
+    'max_samples_per_unknown': 10,       # 每个未知卡牌的最大采样数
     
     # 规则特定配置
     'rule_specific': {
@@ -44,6 +44,13 @@ SAMPLING_CONFIG = {
             'sum_combo_ratio': 0.5,    # 加算连携卡牌比例
             'defensive_ratio': 0.3,    # 防御性卡牌比例
             'random_ratio': 0.2,       # 随机卡牌比例
+        },
+        '选拔': {
+            'exact_star_matching': True,    # 精确星级匹配
+            'fallback_to_closest': True,    # 回退到最接近的星级
+            'strategic_star_selection': True, # 战略性星级选择
+            'confidence_boost': 0.3,        # 选拔规则的置信度提升
+            'max_deviation': 0,             # 允许的最大星级偏差
         }
     },
     
@@ -113,8 +120,34 @@ SAMPLING_CONFIG = {
             'type_diversity_preference': 1.5,  # 类型多样性偏好
             'disruption_strategy': True,       # 破坏战略
             'min_value_avoidance': True,       # 避免最小值
+        },
+        # 选拔规则下的对手倾向
+        '选拔': {
+            'star_conservation_strategy': True,    # 星级保守策略
+            'early_game_stars': [1, 2, 3],        # 早期偏好使用的星级
+            'late_game_stars': [4, 5],            # 后期保留的星级
+            'adaptive_threshold': 5,               # 棋盘卡牌数适应阈值
+            'high_star_preservation': 0.7,        # 高星级保留倾向
+            'strategic_timing': True,              # 战略性时机选择
         }
-    }
+    },
+    
+    # 选拔规则专用配置
+    'draft_mode': {
+        'total_star_limits': {
+            1: 2,  # 1星卡牌2张
+            2: 2,  # 2星卡牌2张
+            3: 2,  # 3星卡牌2张
+            4: 2,  # 4星卡牌2张
+            5: 2,  # 5星卡牌2张
+        },
+        'strict_enforcement': True,         # 严格执行星级限制
+        'intelligent_distribution': True,   # 智能分配剩余星级
+        'opponent_modeling': True,          # 对手选拔建模
+        'priority_stars': [3, 4, 5],       # 优先考虑的星级（高价值卡牌）
+        'early_game_preference': [1, 2],   # 前期偏好的星级
+        'late_game_preference': [4, 5],    # 后期偏好的星级
+    },
 }
 
 # 调试和性能配置
