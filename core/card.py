@@ -96,23 +96,19 @@ class Card:
         my_value = self.get_effective_value(my_direction, rules)
         other_value = other_card.get_effective_value(other_direction, rules)
         
-        # 王牌杀手规则：1与A同时大于对方，其他数字大小不变
+        # 王牌杀手规则：只对 1 与 A(10) 之间的互相比较做特殊处理
         if '王牌杀手' in rules:
-            my_is_ace_killer = (my_value == 1 or my_value == 10)
-            other_is_ace_killer = (other_value == 1 or other_value == 10)
-            
+            my_is_ace_killer = my_value in (1, 10)
+            other_is_ace_killer = other_value in (1, 10)
+
             if my_is_ace_killer and other_is_ace_killer:
-                # 1 vs A 或 A vs 1：按原始数值比较
-                # 1 < 10，所以A胜过1
-                pass  # 继续使用下面的正常比较逻辑
-            elif my_is_ace_killer and not other_is_ace_killer:
-                # 我方是1或A，对方是2-9：我方胜
-                return 1 if not '逆转' in rules else -1
-            elif not my_is_ace_killer and other_is_ace_killer:
-                # 我方是2-9，对方是1或A：对方胜
-                return -1 if not '逆转' in rules else 1
-            # 如果都不是1或A，继续正常比较
-        
+                if my_value == other_value:
+                    return 0
+                if my_value == 1 and other_value == 10:
+                    return 1 if '逆转' not in rules else -1
+                if my_value == 10 and other_value == 1:
+                    return -1 if '逆转' not in rules else 1
+
         # 逆转规则：数字小的一方获胜
         if '逆转' in rules:
             if my_value < other_value:

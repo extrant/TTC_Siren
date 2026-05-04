@@ -4,7 +4,8 @@ from core.card import Card
 from core.player import Player
 from core.board import Board
 from core.game_state import GameState
-from ai.ai import find_best_move_parallel
+from ai.ai import find_best_move_parallel, evaluate_state
+from ai.monte_carlo import monte_carlo_best_move
 from ai.unknown_card_handler import initialize_unknown_card_handler, get_unknown_card_handler
 import os
 import codecs
@@ -115,10 +116,292 @@ def parse_board(board_json):
         board.place_card(r, c, card)
     return board
 
-def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_opponent=False, id_offset=1000):
+def _board_occupancy(board_state):
+    """返回棋盘已占用格数。"""
+    if not board_state:
+        return 0
+
+    occupied = 0
+    for r in range(3):
+        for c in range(3):
+            if board_state.get_card(r, c) is not None:
+                occupied += 1
+    return occupied
+
+def _score_unknown_candidate(card, board_state, rules, owner):
+    """评估未知候选牌在当前棋盘上的最大即时威胁。"""
+    if not board_state:
+        return sum([card.up, card.right, card.down, card.left])
+
+    directions = [
+        (-1, 0, 'up', 'down'),
+        (1, 0, 'down', 'up'),
+        (0, -1, 'left', 'right'),
+        (0, 1, 'right', 'left'),
+    ]
+    best_score = 0.0
+
+    for row in range(3):
+        for col in range(3):
+            if not board_state.is_empty(row, col):
+                continue
+
+            score = 0.0
+            same_matches = []
+            plus_sums = {}
+
+            for dr, dc, my_dir, opp_dir in directions:
+                nr, nc = row + dr, col + dc
+                if not (0 <= nr < 3 and 0 <= nc < 3):
+                    continue
+
+                target = board_state.get_card(nr, nc)
+                if not target:
+                    continue
+
+                target_is_enemy = target.owner != owner
+                if target_is_enemy and card.compare_values(my_dir, target, opp_dir, rules) == 1:
+                    score += 6.0
+
+                my_value = card.get_effective_value(my_dir, rules)
+                target_value = target.get_effective_value(opp_dir, rules)
+                if my_value == target_value:
+                    same_matches.append((target, target_is_enemy))
+
+                plus_sum = my_value + target_value
+                plus_sums.setdefault(plus_sum, []).append((target, target_is_enemy))
+
+            if '同数' in rules and len(same_matches) >= 2 and any(is_enemy for _, is_enemy in same_matches):
+                score += 8.0 * sum(1 for _, is_enemy in same_matches if is_enemy)
+
+            if '加算' in rules:
+                for matches in plus_sums.values():
+                    if len(matches) >= 2 and any(is_enemy for _, is_enemy in matches):
+                        score += 8.0 * sum(1 for _, is_enemy in matches if is_enemy)
+
+            best_score = max(best_score, score)
+
+    value_pressure = max(card.up, card.right, card.down, card.left) + sum([card.up, card.right, card.down, card.left]) / 40.0
+    return best_score * 10.0 + value_pressure
+
+def _select_unknown_cards_for_slots(candidates, slot_count, board_state, rules, owner, is_opponent):
+    """从未知候选池中选择实际填入手牌槽位的卡牌。"""
+    if len(candidates) <= slot_count:
+        return list(candidates)
+
+    occupied = _board_occupancy(board_state)
+    should_risk_select = is_opponent and (occupied >= 4 or (slot_count <= 2 and occupied >= 3))
+    if not should_risk_select:
+        return random.sample(candidates, slot_count)
+
+    ranked = sorted(
+        candidates,
+        key=lambda card: (
+            _score_unknown_candidate(card, board_state, rules or [], owner),
+            card.card_id or 0,
+        ),
+        reverse=True,
+    )
+    selected = ranked[:slot_count]
+    print(
+        f"Endgame risk selection: {len(candidates)} candidates → {slot_count} slots "
+        f"(occupied={occupied}/9)"
+    )
+    return selected
+
+def _is_generated_unknown_card(card):
+    return bool(
+        getattr(card, '_is_generated', False) or
+        getattr(card, '_is_prediction', False) or
+        getattr(card, 'card_id', None) is None or
+        (getattr(card, 'card_id', 0) is not None and getattr(card, 'card_id', 0) >= 1000)
+    )
+
+def _count_unknown_slots_from_hand(hand_cards):
+    return sum(1 for card in hand_cards if _is_generated_unknown_card(card))
+
+def _get_unknown_hand_indices(hand_cards):
+    return [idx for idx, card in enumerate(hand_cards) if _is_generated_unknown_card(card)]
+
+def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_state, opp_owner, opp_player_idx, sample_count):
+    """构建残局多样本场景，用于鲁棒评分。"""
+    handler = get_unknown_card_handler()
+    if not handler:
+        return [base_state]
+
+    unknown_indices = _get_unknown_hand_indices(opp_hand)
+    if not unknown_indices:
+        return [base_state]
+
+    known_opp_hand = [card for card in opp_hand if not _is_generated_unknown_card(card)]
+    scenarios = [base_state]
+
+    for _ in range(max(sample_count - 1, 0)):
+        sampled_cards = handler.generate_opponent_cards(
+            count=len(unknown_indices),
+            rules=rules,
+            used_cards=used_cards.copy(),
+            board_state=board_state,
+            known_hand=known_opp_hand,
+            owner=opp_owner,
+            can_use=True
+        )
+        scenario = base_state.copy()
+        opp_hand_copy = scenario.players[opp_player_idx].hand
+        for idx, sampled_card in zip(unknown_indices, sampled_cards):
+            opp_hand_copy[idx] = sampled_card.copy()
+        scenarios.append(scenario)
+
+    return scenarios
+
+def _best_immediate_reply_score(state_after_my_move, ai_player_idx):
+    """计算对手对当前局面的最佳即时回应分数。"""
+    reply_moves = state_after_my_move.get_available_moves()
+    if not reply_moves:
+        return evaluate_state(state_after_my_move, ai_player_idx)
+
+    best_reply = float('inf')
+    for reply_card, (row, col) in reply_moves:
+        reply_state = state_after_my_move.copy()
+        scenario_card = next(
+            (c for c in reply_state.current_player.hand if c.card_id == reply_card.card_id),
+            None
+        )
+        if scenario_card is None:
+            continue
+        if reply_state.make_move(row, col, scenario_card) is None:
+            continue
+        best_reply = min(best_reply, evaluate_state(reply_state, ai_player_idx))
+
+    return best_reply if best_reply != float('inf') else evaluate_state(state_after_my_move, ai_player_idx)
+
+def _evaluate_endgame_move_robustly(base_state, move, scenario_states, ai_player_idx,
+                                   safety_margin=0.75):
+    """对单个走法进行残局多样本鲁棒评分。"""
+    card, (row, col) = move
+    scenario_scores = []
+    safety_votes = 0
+    corner_risk = _calculate_corner_safety_risk(card, row, col, base_state.board, base_state.rules)
+
+    for scenario in scenario_states:
+        scenario_eval = evaluate_state(scenario, ai_player_idx)
+        scenario_after = scenario.copy()
+        scenario_card = next((c for c in scenario_after.current_player.hand if c.card_id == card.card_id), None)
+        if scenario_card is None:
+            continue
+        if scenario_after.make_move(row, col, scenario_card) is None:
+            continue
+
+        reply_score = _best_immediate_reply_score(scenario_after, ai_player_idx)
+        scenario_scores.append(reply_score)
+        if reply_score >= scenario_eval - safety_margin:
+            safety_votes += 1
+
+    if not scenario_scores:
+        return float('-inf'), 0.0, float('-inf')
+
+    avg_score = sum(scenario_scores) / len(scenario_scores)
+    worst_score = min(scenario_scores)
+    robust_score = avg_score * 0.65 + worst_score * 0.35
+    safety_ratio = safety_votes / len(scenario_scores)
+    if _is_corner_position(row, col) and corner_risk >= 5.0 and safety_ratio < 0.8:
+        return float('-inf'), safety_ratio, float('-inf'), corner_risk
+
+    final_score = robust_score - (1.0 - safety_ratio) * 3.0 - corner_risk * 1.1
+    return final_score, safety_ratio, robust_score, corner_risk
+
+def select_endgame_robust_move(base_state, scenario_states, ai_player_idx):
+    """在残局场景中选择鲁棒性更强的走法。"""
+    moves = base_state.get_available_moves()
+    if not moves:
+        return None, []
+
+    scored_moves = []
+    for move in moves:
+        final_score, safety_ratio, robust_score, corner_risk = _evaluate_endgame_move_robustly(
+            base_state, move, scenario_states, ai_player_idx
+        )
+        scored_moves.append({
+            'move': move,
+            'final_score': final_score,
+            'safety_ratio': safety_ratio,
+            'robust_score': robust_score,
+            'corner_risk': corner_risk,
+        })
+
+    safe_moves = [
+        item for item in scored_moves
+        if item['safety_ratio'] >= 0.5 and (
+            item['corner_risk'] < 5.0 or item['safety_ratio'] >= 0.8
+        )
+    ]
+    ranked_moves = safe_moves if safe_moves else scored_moves
+    ranked_moves.sort(key=lambda item: (item['final_score'], item['safety_ratio'], item['robust_score']), reverse=True)
+
+    best_item = ranked_moves[0]
+    return best_item['move'], scored_moves
+
+def _should_use_endgame_robust_mode(board_state, opp_unknown_count):
+    """判断是否启用残局多样本鲁棒模式。"""
+    occupied = _board_occupancy(board_state)
+    return occupied >= 6 and 0 < opp_unknown_count <= 2
+
+def _move_key(move):
+    card, (row, col) = move
+    return (card.card_id, row, col)
+
+def _is_corner_position(row, col):
+    return (row, col) in [(0, 0), (0, 2), (2, 0), (2, 2)]
+
+def _calculate_corner_safety_risk(card, row, col, board_state, rules):
+    """计算残局角落安全风险。"""
+    occupied = _board_occupancy(board_state)
+    if occupied < 5:
+        return 0.0
+
+    stage_weight = 1.0 + min((occupied - 4) / 4.0, 1.0)
+    risk = 0.0
+    attackable_sides = 0
+    weak_sides = 0
+    directions = [
+        (-1, 0, 'up', 'down'),
+        (1, 0, 'down', 'up'),
+        (0, -1, 'left', 'right'),
+        (0, 1, 'right', 'left'),
+    ]
+
+    for dr, dc, my_dir, opp_dir in directions:
+        nr, nc = row + dr, col + dc
+        if not (0 <= nr < 3 and 0 <= nc < 3):
+            continue
+
+        attackable_sides += 1
+        my_value = card.get_effective_value(my_dir, rules or [])
+        if my_value <= 3:
+            weak_sides += 1
+            risk += (4 - my_value) * 2.2
+        elif my_value == 4:
+            risk += 1.0
+
+        adj_card = board_state.get_card(nr, nc) if board_state else None
+        if adj_card and adj_card.owner != card.owner:
+            opp_value = adj_card.get_effective_value(opp_dir, rules or [])
+            if opp_value > my_value:
+                risk += (opp_value - my_value) * 1.5
+            elif opp_value == my_value:
+                risk += 1.0
+
+    if _is_corner_position(row, col) and weak_sides > 0:
+        risk += weak_sides * 1.5
+    elif attackable_sides >= 3 and weak_sides > 0:
+        risk += weak_sides * 1.0
+
+    return risk * stage_weight
+
+def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_opponent=False, id_offset=1000, skip_sampling=False):
     """
     解析手牌，智能处理未知卡牌
-    
+
     Args:
         hand_json: 手牌JSON数据
         owner: 卡牌所有者
@@ -127,87 +410,103 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
         board_state: 当前棋盘状态（用于智能采样）
         is_opponent: 是否为对手手牌（启用行为建模）
         id_offset: ID偏移量（已弃用）
+        skip_sampling: 跳过智能采样，保留未知卡牌为占位符（蒙特卡洛求解器用）
     """
-    hand = []
+    hand_slots = []
     known_cards = []
     unknown_count = 0
     type_map = get_card_type_map()
-    
-    # 第一遍：处理已知卡牌，统计未知卡牌数量
-    for idx, item in enumerate(hand_json):
+
+    # 第一遍：解析所有槽位，保留原始顺序
+    for item in hand_json:
         if all([item[k] == 0 for k in ['numU', 'numR', 'numD', 'numL']]):
-            # 未知手牌
+            hand_slots.append(("unknown", item))
             unknown_count += 1
         else:
-            # 已知手牌
             up, right, down, left = item['numU'], item['numL'], item['numD'], item['numR']
             card_id = find_card_id_by_stats(up, right, down, left)
             if card_id is None:
                 raise ValueError(f"Hand card not found in database: U{up} R{right} D{down} L{left}")
             card_type = type_map.get(card_id)
-            c = Card(up, right, down, left, owner, card_id, card_type, 
-                    item.get('canUse', True))  # 支持canUse参数
-            hand.append(c)
+            c = Card(up, right, down, left, owner, card_id, card_type,
+                    item.get('canUse', True))
+            hand_slots.append(("known", c))
             known_cards.append(c)
             used_cards.add(card_id)
-    
-    # 第二遍：智能处理未知卡牌
+
+    generated_unknown_cards = []
+
+    # 第二遍：智能处理未知卡牌（或跳过采样保留占位符）
     if unknown_count > 0:
-        card_type = "opponent" if is_opponent else "own"
-        print(f"Processing {unknown_count} unknown {card_type} cards for {owner}")
-        ensure_handler_initialized()
-        handler = get_unknown_card_handler()
-        
-        if handler and rules:
-            # 使用智能采样，对对手启用行为建模
-            if is_opponent:
-                # 对手手牌使用行为建模采样
-                unknown_cards = handler.generate_opponent_cards(
-                    count=unknown_count,
-                    rules=rules,
-                    used_cards=used_cards.copy(),
-                    board_state=board_state,
-                    known_hand=known_cards,
-                    owner=owner,
-                    can_use=True
-                )
-            else:
-                # 己方手牌使用常规采样
-                unknown_cards = handler.generate_unknown_cards(
-                    count=unknown_count,
-                    rules=rules,
-                    used_cards=used_cards.copy(),
-                    board_state=board_state,
-                    known_hand=known_cards,
-                    owner=owner,
-                    can_use=True
-                )
-            
-            # 设置正确的canUse值
-            unknown_idx = 0
-            for idx, item in enumerate(hand_json):
-                if all([item[k] == 0 for k in ['numU', 'numR', 'numD', 'numL']]):
-                    if unknown_idx < len(unknown_cards):
-                        unknown_cards[unknown_idx].can_use = item.get('canUse', True)
-                        unknown_idx += 1
-            
-            hand.extend(unknown_cards)
-            print(f"Generated {len(unknown_cards)} {card_type} cards, hand now has {len(hand)} total cards")
+        if skip_sampling:
+            print(f"Skipped sampling: kept {unknown_count} unknown cards as placeholders for Monte Carlo")
         else:
-            # 回退到简化的处理方式
-            print("Using fallback sampling for unknown cards")
-            all_cards = get_all_cards()
-            sample_size = min(unknown_count * 5, len(all_cards))  # 限制采样数量
-            sampled_cards = random.sample(all_cards, sample_size)
-            
-            for idx, item in enumerate(hand_json):
-                if all([item[k] == 0 for k in ['numU', 'numR', 'numD', 'numL']]):
-                    for card in sampled_cards:
-                        c = Card(card.up, card.right, card.down, card.left, owner, 
-                               card.card_id, card.card_type, item.get('canUse', True))
-                        hand.append(c)
-            print(f"Fallback generated cards, hand now has {len(hand)} total cards")
-    
+            card_type_label = "opponent" if is_opponent else "own"
+            print(f"Processing {unknown_count} unknown {card_type_label} cards for {owner}")
+            ensure_handler_initialized()
+            handler = get_unknown_card_handler()
+
+            if handler and rules:
+                if is_opponent:
+                    unknown_cards = handler.generate_opponent_cards(
+                        count=unknown_count,
+                        rules=rules,
+                        used_cards=used_cards.copy(),
+                        board_state=board_state,
+                        known_hand=known_cards,
+                        owner=owner,
+                        can_use=True
+                    )
+                else:
+                    unknown_cards = handler.generate_unknown_cards(
+                        count=unknown_count,
+                        rules=rules,
+                        used_cards=used_cards.copy(),
+                        board_state=board_state,
+                        known_hand=known_cards,
+                        owner=owner,
+                        can_use=True
+                    )
+
+                generated_unknown_cards = _select_unknown_cards_for_slots(
+                    unknown_cards,
+                    unknown_count,
+                    board_state,
+                    rules,
+                    owner,
+                    is_opponent,
+                )
+                print(f"Generated {len(generated_unknown_cards)} {card_type_label} cards for {unknown_count} unknown slots")
+            else:
+                print("Using fallback sampling for unknown cards")
+                all_cards = get_all_cards()
+                sample_size = min(unknown_count * 5, len(all_cards))
+                sampled_cards = random.sample(all_cards, sample_size)
+                if len(sampled_cards) > unknown_count:
+                    sampled_cards = random.sample(sampled_cards, unknown_count)
+
+                generated_unknown_cards = [
+                    Card(card.up, card.right, card.down, card.left, owner,
+                         card.card_id, card.card_type, True)
+                    for card in sampled_cards
+                ]
+                print(f"Fallback generated {len(generated_unknown_cards)} cards for {unknown_count} unknown slots")
+
+    # 第三遍：按原始顺序重建手牌
+    hand = []
+    unknown_idx = 0
+    for kind, payload in hand_slots:
+        if kind == "known":
+            hand.append(payload)
+        else:
+            if unknown_idx < len(generated_unknown_cards):
+                card = generated_unknown_cards[unknown_idx]
+            else:
+                card = Card(0, 0, 0, 0, owner, None, None, payload.get('canUse', True))
+            card.can_use = payload.get('canUse', True)
+            hand.append(card)
+            unknown_idx += 1
+
     return hand
 
 def parse_rules_and_open_mode(rules_str):
@@ -699,9 +998,9 @@ def evaluate_current_position(game_state, my_owner):
     """评估当前局面（简化版）"""
     red_count, blue_count = game_state.count_cards()
     
-    if my_owner == 1:  # 蓝方
+    if my_owner == 'blue':
         basic_score = blue_count - red_count
-    else:  # 红方
+    else:  # my_owner == 'red'
         basic_score = red_count - blue_count
     
     # 考虑位置因素
@@ -711,7 +1010,7 @@ def evaluate_current_position(game_state, my_owner):
             card = game_state.board.get_card(r, c)
             if card:
                 weight = 1.5 if (r, c) in [(0,0), (0,2), (2,0), (2,2)] else 1.2 if (r, c) == (1,1) else 1.0
-                if (card.owner == 'blue' and my_owner == 1) or (card.owner == 'red' and my_owner == 2):
+                if (card.owner == 'blue' and my_owner == 'blue') or (card.owner == 'red' and my_owner == 'red'):
                     position_bonus += weight
                 else:
                     position_bonus -= weight
@@ -1040,7 +1339,7 @@ def count_captured_cards(game_state, move, my_owner):
     
     # 执行移动（会自动处理翻转和同类效果）
     card_copy = card.copy()
-    card_copy.owner = 'red' if my_owner == 2 else 'blue'
+    card_copy.owner = 'red' if my_owner == 'red' else 'blue'
     move_record = game_state.make_move(row, col, card_copy)
     if move_record is None:
         return 0
@@ -1108,8 +1407,8 @@ def _print_type_analysis(game_state):
     """
     打印同类强化/弱化的详细分析
     """
-    # 统计各类型数量
-    type_counts = {}
+    # 统计棋盘上已设置的各类型数量。手牌会受到修正影响，但不增加修正层数。
+    board_type_counts = {}
     
     # 棋盘卡牌
     print("棋盘卡牌类型分布：")
@@ -1117,7 +1416,7 @@ def _print_type_analysis(game_state):
         for c in range(3):
             card = game_state.board.get_card(r, c)
             if card and card.card_type:
-                type_counts[card.card_type] = type_counts.get(card.card_type, 0) + 1
+                board_type_counts[card.card_type] = board_type_counts.get(card.card_type, 0) + 1
                 modifier_info = f"(修正{card.type_modifier:+d})" if card.type_modifier != 0 else ""
                 print(f"  位置({r},{c}): {card.card_type} {modifier_info}")
     
@@ -1128,7 +1427,6 @@ def _print_type_analysis(game_state):
         print(f"  {player_name}手牌：")
         for hand_card in player.hand:
             if hand_card.card_type:
-                type_counts[hand_card.card_type] = type_counts.get(hand_card.card_type, 0) + 1
                 modifier_info = f"(修正{hand_card.type_modifier:+d})" if hand_card.type_modifier != 0 else ""
                 is_unknown = getattr(hand_card, '_is_prediction', False) or \
                            (hand_card.up == 0 and hand_card.right == 0 and hand_card.down == 0 and hand_card.left == 0)
@@ -1137,10 +1435,10 @@ def _print_type_analysis(game_state):
     
     # 总计
     print(f"\n类型总计：")
-    for card_type, count in type_counts.items():
+    for card_type, count in board_type_counts.items():
         rule_type = "强化" if '同类强化' in game_state.rules else "弱化"
-        modifier = count - 1 if '同类强化' in game_state.rules else -(count - 1)
-        print(f"  {card_type}: {count}张 → {rule_type}{modifier:+d}")
+        modifier = count if '同类强化' in game_state.rules else -count
+        print(f"  {card_type}: 场上{count}张 → {rule_type}{modifier:+d}")
 
 def analyze_corner_strategy(card, position, board):
     """
@@ -1312,16 +1610,51 @@ def ai_move():
             print(f"全局星级使用情况: {global_star_usage}")
         
         # 使用智能手牌解析，对对手手牌启用行为建模
+        # 蒙特卡洛模式下跳过对手手牌采样（求解器内部自行处理未知卡牌）
+        solver_type = data.get('solver', 'minimax')
+        mc_skip_sampling = (solver_type == 'monte_carlo')
         my_hand = parse_hand(data['myHand'], my_owner, used_cards, rules, board, is_opponent=False)
-        opp_hand = parse_hand(data['oppHand'], opp_owner, used_cards, rules, board, is_opponent=True)
-        # 玩家顺序
+        opp_hand = parse_hand(data['oppHand'], opp_owner, used_cards, rules, board,
+                              is_opponent=True, skip_sampling=mc_skip_sampling)
+        # 玩家顺序：遵循GameState约定 - players[0]=红方, players[1]=蓝方
+        # currentPlayer: 1=蓝方回合, 2=红方回合, 0=未知(兼容旧客户端)
         from core.player import Player
+        current_player = data.get('currentPlayer', 0)
+
+        # 按照红蓝方约定创建玩家列表
         if my_owner == 'red':
+            # 我是红方(players[0]), 对手是蓝方(players[1])
             players = [Player('me', my_hand), Player('opp', opp_hand)]
-            current_player_idx = 0
-        else:
+        else:  # my_owner == 'blue'
+            # 对手是红方(players[0]), 我是蓝方(players[1])
             players = [Player('opp', opp_hand), Player('me', my_hand)]
+
+        # 确定当前回合玩家
+        if current_player == 2:  # 红方回合
+            current_player_idx = 0
+        elif current_player == 1:  # 蓝方回合
             current_player_idx = 1
+        else:
+            # 兼容旧客户端：从棋盘卡牌数量推断回合
+            red_count = 0
+            blue_count = 0
+            for r in range(3):
+                for c in range(3):
+                    board_card = board.get_card(r, c)
+                    if board_card:
+                        if board_card.owner == 'red':
+                            red_count += 1
+                        elif board_card.owner == 'blue':
+                            blue_count += 1
+            if red_count < blue_count:
+                current_player_idx = 0  # 红方落后, 红方回合
+            elif blue_count < red_count:
+                current_player_idx = 1  # 蓝方落后, 蓝方回合
+            else:
+                current_player_idx = 0  # 平局, 默认红方(先手)回合
+
+        is_my_turn = (my_owner == 'red' and current_player_idx == 0) or (my_owner == 'blue' and current_player_idx == 1)
+        print(f"[Turn] my_owner={my_owner}, currentPlayer={current_player}, current_player_idx={current_player_idx}, is_my_turn={is_my_turn}")
         game_state = GameState(board, players, current_player_idx=current_player_idx, rules=rules)
         
         # 如果有同类强化/弱化规则，立即处理
@@ -1333,6 +1666,8 @@ def ai_move():
         # 检查是否请求详细搜索进度 (默认关闭以提升性能)
         show_search_progress = data.get('show_search_progress', False)
         search_progress_data = []
+        opp_unknown_count = _count_unknown_slots_from_hand(opp_hand)
+        use_endgame_robust = solver_type == 'minimax' and _should_use_endgame_robust_mode(board, opp_unknown_count)
         
         def progress_callback(progress_info):
             """轻量级搜索进度回调函数"""
@@ -1359,27 +1694,70 @@ def ai_move():
                       f"节点={progress_info['nodes_searched']:,}, "
                       f"时间={progress_info['time_elapsed']:.2f}秒")
         
-        move, _ = find_best_move_parallel(
-            game_state,
-            max_depth=10,  # 降低到8层以提升性能
-            verbose=False,  # 关闭详细输出以提升性能
-            all_cards=get_all_cards(),
-            open_mode=open_mode,
-            max_time=10,  # 降低到5秒以提升响应速度
-            progress_callback=progress_callback if show_search_progress else None
-        )
+        # 选择求解器（solver_type 已在上面读取）
+        mc_simulations = data.get('mc_simulations', 150)  # 蒙特卡洛模拟次数
 
-        # MCTS
-        #ai_hand = my_hand if my_owner == 'red' else opp_hand
-        #move, best_path, _, main_root = mcts_best_move(
-        #    game_state,
-        #    all_cards=get_all_cards(),
-        #    my_hand=ai_hand,
-        #    n_simulations=None,
-        #    max_seconds=5,
-        #    progress_callback=None,
-        #    parallel=12
-        #)
+        if solver_type == 'monte_carlo':
+            print(f"[Solver] 使用蒙特卡洛求解器 (simulations={mc_simulations})")
+            move, _ = monte_carlo_best_move(
+                game_state,
+                all_cards=get_all_cards(),
+                my_owner=my_owner,
+                time_limit=8,
+                base_simulations=mc_simulations,
+                verbose=True
+            )
+        else:
+            print("[Solver] 使用 Minimax 求解器")
+            move, _ = find_best_move_parallel(
+                game_state,
+                max_depth=10,
+                verbose=False,
+                all_cards=get_all_cards(),
+                open_mode=open_mode,
+                max_time=10,
+                progress_callback=progress_callback if show_search_progress else None
+            )
+
+            if use_endgame_robust:
+                opponent_player_idx = 0 if my_owner == 'blue' else 1
+                scenario_sample_count = min(8, max(5, opp_unknown_count * 3 + 2))
+                scenario_states = _build_endgame_scenarios(
+                    game_state,
+                    opp_hand,
+                    used_cards,
+                    rules,
+                    board,
+                    opp_owner,
+                    opponent_player_idx,
+                    scenario_sample_count
+                )
+                robust_move, robust_candidates = select_endgame_robust_move(
+                    game_state,
+                    scenario_states,
+                    game_state.current_player_idx
+                )
+                robust_lookup = {_move_key(item['move']): item for item in robust_candidates}
+
+                if move is not None and robust_move is not None:
+                    standard_item = robust_lookup.get(_move_key(move))
+                    robust_item = robust_lookup.get(_move_key(robust_move))
+                    if standard_item and robust_item:
+                        should_override = (
+                            standard_item['safety_ratio'] < 0.5 and robust_item['safety_ratio'] >= 0.5
+                        ) or (
+                            robust_item['safety_ratio'] > standard_item['safety_ratio'] and
+                            robust_item['final_score'] >= standard_item['final_score'] - 0.25
+                        ) or (
+                            robust_item['final_score'] > standard_item['final_score'] + 0.35
+                        )
+                        if should_override and _move_key(robust_move) != _move_key(move):
+                            print(
+                                f"[Solver] 残局鲁棒覆盖: 标准={standard_item['final_score']:.3f}/"
+                                f"{standard_item['safety_ratio']:.2f}, "
+                                f"鲁棒={robust_item['final_score']:.3f}/{robust_item['safety_ratio']:.2f}"
+                            )
+                            move = robust_move
 
         if move is None:
             return jsonify({'move': None, 'msg': '无可用动作'})

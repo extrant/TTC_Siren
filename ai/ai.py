@@ -91,6 +91,60 @@ def get_card_star_map():
     return get_card_star_map._cache
 
 
+def _count_occupied_cells(state: GameState) -> int:
+    """统计棋盘已占用格数。"""
+    occupied = 0
+    for r in range(3):
+        for c in range(3):
+            if state.board.get_card(r, c) is not None:
+                occupied += 1
+    return occupied
+
+
+def _calculate_endgame_exposure_penalty(card, row: int, col: int, state: GameState) -> float:
+    """计算残局阶段的边值暴露惩罚。"""
+    occupied = _count_occupied_cells(state)
+    if occupied < 5:
+        return 0.0
+
+    stage_weight = 1.0 + min((occupied - 4) / 4.0, 1.0)
+    penalty = 0.0
+    directions = [(-1, 0, 'up', 'down'), (1, 0, 'down', 'up'),
+                  (0, -1, 'left', 'right'), (0, 1, 'right', 'left')]
+
+    attackable_sides = 0
+    weak_attackable_sides = 0
+
+    for dr, dc, my_dir, opp_dir in directions:
+        nr, nc = row + dr, col + dc
+        if not (0 <= nr < 3 and 0 <= nc < 3):
+            continue
+
+        attackable_sides += 1
+        my_value = card.get_effective_value(my_dir, state.rules)
+        adj_card = state.board.get_card(nr, nc)
+
+        if my_value <= 3:
+            weak_attackable_sides += 1
+            penalty += (4 - my_value) * 2.5
+        elif my_value == 4:
+            penalty += 1.0
+
+        if adj_card and adj_card.owner != card.owner:
+            opp_value = adj_card.get_effective_value(opp_dir, state.rules)
+            if opp_value > my_value:
+                penalty += (opp_value - my_value) * 1.8
+            elif opp_value == my_value:
+                penalty += 1.0
+
+    if (row, col) in [(0, 0), (0, 2), (2, 0), (2, 2)] and weak_attackable_sides > 0:
+        penalty += weak_attackable_sides * 2.0
+    elif attackable_sides >= 3 and weak_attackable_sides > 0:
+        penalty += weak_attackable_sides * 1.0
+
+    return penalty * stage_weight
+
+
 def evaluate_state(state: GameState, ai_player_idx: int) -> float:
     """改进的评估函数"""
     red_count, blue_count = state.count_cards()
@@ -142,7 +196,7 @@ def evaluate_state(state: GameState, ai_player_idx: int) -> float:
     return base_score * 0.7 + position_score * 0.3 + corner_edge_score * 0.1
 
 
-"""
+r"""
 高级评估函数数学模型说明：
 
 1. 综合评分函数 (Comprehensive Evaluation Function)
@@ -290,6 +344,9 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
     except Exception:
         # 若处理器未初始化或计算失败，忽略该评分
         pass
+
+    # 7. 残局暴露面惩罚
+    score -= _calculate_endgame_exposure_penalty(card, row, col, state)
 
     return float(min(score, 1000.0))  # 确保最终分数不会过大
 

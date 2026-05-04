@@ -176,6 +176,8 @@ class UnknownCardHandler:
         config = get_sampling_config()
         max_cards = get_max_cards_per_unknown()
         
+        board_occupancy = self._get_board_occupancy(board_state)
+
         if config.get('performance_mode', False):
             # 对手卡牌采样更加保守
             if count == 1:
@@ -184,17 +186,24 @@ class UnknownCardHandler:
                 max_samples = min(5, max_cards)  # 2张对手卡牌每张采样5张
             else:
                 max_samples = min(6, max_cards)  # 更多对手卡牌每张最多采样6张
-                
-            # 对手卡牌根据游戏阶段更激进地减少采样
-            board_occupancy = self._get_board_occupancy(board_state)
-            if board_occupancy > 0.5:  # 中期开始就减少对手卡牌采样
-                max_samples = max(3, max_samples - 1)
+
+            if board_occupancy >= 0.65 or count <= 2:
+                max_samples = max(max_samples, min(12, max_cards))
+            elif board_occupancy >= 0.45:
+                max_samples = max(max_samples, min(8, max_cards))
                 
             actual_samples = min(max_samples, max_cards)
         else:
-            actual_samples = min(count * config.get('fallback_sample_multiplier', 2), max_cards)
+            base_multiplier = config.get('fallback_sample_multiplier', 2)
+            if board_occupancy >= 0.65:
+                sample_multiplier = max(base_multiplier, 16 if count == 1 else 12)
+            elif board_occupancy >= 0.45 or count <= 2:
+                sample_multiplier = max(base_multiplier, 12 if count <= 2 else 8)
+            else:
+                sample_multiplier = base_multiplier
+            actual_samples = min(count * sample_multiplier, max_cards)
         
-        print(f"Opponent sampling: {count} unknown cards → {actual_samples} samples")
+        print(f"Opponent sampling: {count} unknown cards → {actual_samples} samples (occupied={board_occupancy:.0%})")
         
         # 全部卡牌可用（对手可能有重复卡牌）
         available_cards = self.all_cards.copy()
