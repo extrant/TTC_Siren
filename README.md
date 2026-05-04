@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/extrant/TTC_Siren/refs/heads/main/ttcicon.png" width="720" alt="TTC_Siren">
+  <img src="https://raw.githubusercontent.com/extrant/TTC_Siren/refs/heads/main/ttcicon.png" width="1920" alt="TTC_Siren">
 </div>
 
 # TTC_Siren
