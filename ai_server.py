@@ -11,6 +11,8 @@ import os
 import codecs
 import threading
 import random
+import itertools
+import time
 
 # 全局缓存和唯一ID查找表
 _card_db = None
@@ -223,21 +225,180 @@ def _count_unknown_slots_from_hand(hand_cards):
 def _get_unknown_hand_indices(hand_cards):
     return [idx for idx, card in enumerate(hand_cards) if _is_generated_unknown_card(card)]
 
-def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_state, opp_owner, opp_player_idx, sample_count):
-    """构建残局多样本场景，用于鲁棒评分。"""
-    handler = get_unknown_card_handler()
-    if not handler:
-        return [base_state]
+def _base_card_id(card):
+    """返回推测牌对应的真实卡牌 ID。"""
+    card_id = getattr(card, 'card_id', None)
+    if card_id is None:
+        return None
+    if card_id >= 1000:
+        return card_id - 1000
+    return card_id
 
+def _known_card_ids_on_board(board_state):
+    """收集棋盘上已出现的真实卡牌 ID。"""
+    known_ids = set()
+    if not board_state:
+        return known_ids
+
+    for row in range(3):
+        for col in range(3):
+            card = board_state.get_card(row, col)
+            card_id = _base_card_id(card) if card else None
+            if card_id is not None:
+                known_ids.add(card_id)
+    return known_ids
+
+def _known_card_ids_in_hands(*hands):
+    """收集明牌手牌中的真实卡牌 ID。"""
+    known_ids = set()
+    for hand in hands:
+        for card in hand:
+            if _is_generated_unknown_card(card):
+                continue
+            card_id = _base_card_id(card)
+            if card_id is not None:
+                known_ids.add(card_id)
+    return known_ids
+
+def _high_star_usage(cards, star_map):
+    """统计一组已知卡牌占用的高星配额。"""
+    high_star_count = 0
+    five_star_count = 0
+    for card in cards:
+        if _is_generated_unknown_card(card):
+            continue
+        star = star_map.get(_base_card_id(card), 1)
+        if star >= 4:
+            high_star_count += 1
+        if star == 5:
+            five_star_count += 1
+    return high_star_count, five_star_count
+
+def _is_legal_unknown_assignment(assignment, known_opp_cards, star_map):
+    """检查未知牌组合是否满足对手卡组星级限制。"""
+    high_star_count, five_star_count = _high_star_usage(known_opp_cards, star_map)
+    seen_ids = set()
+
+    for card in assignment:
+        card_id = _base_card_id(card)
+        if card_id in seen_ids:
+            return False
+        seen_ids.add(card_id)
+
+        star = star_map.get(card_id, 1)
+        if star >= 4:
+            high_star_count += 1
+        if star == 5:
+            five_star_count += 1
+
+    return high_star_count <= 2 and five_star_count <= 1
+
+def _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner):
+    """枚举符合当前已知信息和卡组限制的对手未知牌候选。
+
+    Args:
+        base_state: 当前局面，用于读取双方手牌。
+        opp_hand: 对手当前手牌。
+        board_state: 当前棋盘。
+        opp_owner: 对手颜色。
+
+    Returns:
+        按数据库顺序生成的合法未知候选卡牌列表。
+    """
+    star_map = get_card_star_map()
+    type_map = get_card_type_map()
+    known_global_ids = _known_card_ids_on_board(board_state)
+    for player in base_state.players:
+        known_global_ids.update(_known_card_ids_in_hands(player.hand))
+
+    known_opp_cards = [card for card in opp_hand if not _is_generated_unknown_card(card)]
+    candidate_cards = []
+    for card in get_all_cards():
+        card_id = _base_card_id(card)
+        if card_id in known_global_ids:
+            continue
+
+        candidate = Card(
+            card.base_up,
+            card.base_right,
+            card.base_down,
+            card.base_left,
+            owner=opp_owner,
+            card_id=card_id,
+            card_type=type_map.get(card_id),
+            can_use=True,
+        )
+        if not _is_legal_unknown_assignment([candidate], known_opp_cards, star_map):
+            continue
+        candidate._is_generated = True
+        candidate._is_prediction = True
+        candidate_cards.append(candidate)
+
+    return candidate_cards
+
+def _unique_unknown_candidates(candidates):
+    """按卡牌身份去重，保留候选池中的首个副本。"""
+    unique = []
+    seen = set()
+    for card in candidates:
+        key = (
+            card.card_id,
+            card.base_up,
+            card.base_right,
+            card.base_down,
+            card.base_left,
+            card.card_type,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(card)
+    return unique
+
+def _copy_state_with_unknown_assignment(base_state, opp_player_idx, unknown_indices, sampled_cards):
+    """复制局面，并把一组未知牌候选填入对手手牌槽位。"""
+    scenario = base_state.copy()
+    opp_hand_copy = scenario.players[opp_player_idx].hand
+    for idx, sampled_card in zip(unknown_indices, sampled_cards):
+        copied_card = sampled_card.copy()
+        copied_card.owner = opp_hand_copy[idx].owner
+        copied_card.can_use = opp_hand_copy[idx].can_use
+        opp_hand_copy[idx] = copied_card
+    return scenario
+
+def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_state, opp_owner, opp_player_idx, sample_count):
+    """构建残局信息集场景，优先覆盖对手高威胁未知牌组合。
+
+    Args:
+        base_state: 当前搜索局面。
+        opp_hand: 当前对手手牌，未知槽位已由预测牌占位。
+        used_cards: 已知使用过的卡牌 ID。
+        rules: 当前规则列表。
+        board_state: 当前棋盘。
+        opp_owner: 对手颜色。
+        opp_player_idx: 对手在 GameState.players 中的索引。
+        sample_count: 最多构建的可能世界数量。
+
+    Returns:
+        一组 GameState 副本；无未知牌时仅返回当前局面。
+    """
+    handler = get_unknown_card_handler()
     unknown_indices = _get_unknown_hand_indices(opp_hand)
     if not unknown_indices:
         return [base_state]
+    if not handler:
+        return [base_state]
 
     known_opp_hand = [card for card in opp_hand if not _is_generated_unknown_card(card)]
-    scenarios = [base_state]
-
-    for _ in range(max(sample_count - 1, 0)):
-        sampled_cards = handler.generate_opponent_cards(
+    legal_candidates = _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner)
+    if legal_candidates:
+        candidates = legal_candidates
+        print(
+            f"Endgame legal enumeration: {len(legal_candidates)} candidates "
+            f"for {len(unknown_indices)} unknown slots"
+        )
+    else:
+        candidates = handler.generate_opponent_cards(
             count=len(unknown_indices),
             rules=rules,
             used_cards=used_cards.copy(),
@@ -246,13 +407,185 @@ def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_stat
             owner=opp_owner,
             can_use=True
         )
-        scenario = base_state.copy()
-        opp_hand_copy = scenario.players[opp_player_idx].hand
-        for idx, sampled_card in zip(unknown_indices, sampled_cards):
-            opp_hand_copy[idx] = sampled_card.copy()
-        scenarios.append(scenario)
+    candidates = _unique_unknown_candidates(candidates)
+    if not candidates:
+        return [base_state]
 
-    return scenarios
+    ranked_candidates = sorted(
+        candidates,
+        key=lambda card: (
+            _score_unknown_candidate(card, board_state, rules or [], opp_owner),
+            card.up + card.right + card.down + card.left,
+            -(card.card_id or 0),
+        ),
+        reverse=True,
+    )
+
+    unknown_count = len(unknown_indices)
+    candidate_limit = min(len(ranked_candidates), max(sample_count * unknown_count, unknown_count))
+    scenario_limit = max(1, sample_count)
+    scenarios = []
+    seen_assignments = set()
+    star_map = get_card_star_map()
+
+    for assignment in itertools.permutations(ranked_candidates[:candidate_limit], unknown_count):
+        assignment_key = tuple(card.card_id for card in assignment)
+        if assignment_key in seen_assignments:
+            continue
+        if not _is_legal_unknown_assignment(assignment, known_opp_hand, star_map):
+            continue
+        seen_assignments.add(assignment_key)
+        scenarios.append(_copy_state_with_unknown_assignment(
+            base_state,
+            opp_player_idx,
+            unknown_indices,
+            assignment,
+        ))
+        if len(scenarios) >= scenario_limit:
+            break
+
+    return scenarios or [base_state]
+
+def _endgame_score(state, ai_player_idx):
+    """返回终局或近终局时 AI 视角的牌数差。"""
+    red_count, blue_count = state.count_cards()
+    return (red_count - blue_count) if ai_player_idx == 0 else (blue_count - red_count)
+
+def _endgame_state_key(state):
+    """为残局完全搜索构建稳定缓存键。"""
+    board_key = []
+    for r in range(3):
+        for c in range(3):
+            card = state.board.get_card(r, c)
+            if card is None:
+                board_key.append(None)
+            else:
+                board_key.append((
+                    card.card_id,
+                    card.owner,
+                    card.type_modifier,
+                    card.base_up,
+                    card.base_right,
+                    card.base_down,
+                    card.base_left,
+                ))
+
+    hand_key = []
+    for player in state.players:
+        hand_key.append(tuple(
+            (
+                card.card_id,
+                card.owner,
+                card.can_use,
+                card.type_modifier,
+                card.base_up,
+                card.base_right,
+                card.base_down,
+                card.base_left,
+            )
+            for card in player.hand
+        ))
+
+    return (state.current_player_idx, tuple(board_key), tuple(hand_key), tuple(state.rules))
+
+def _solve_endgame_exact(state, ai_player_idx, cache=None):
+    """对空位很少的残局做完整 Minimax 终局搜索。
+
+    Args:
+        state: 当前局面，会在搜索中原地落子并撤销。
+        ai_player_idx: AI 玩家索引。
+        cache: 本次信息集搜索的局面缓存。
+
+    Returns:
+        AI 视角终局牌数差；正数更好，负数更差。
+    """
+    if cache is None:
+        cache = {}
+    if state.is_game_over():
+        return _endgame_score(state, ai_player_idx)
+
+    key = _endgame_state_key(state)
+    if key in cache:
+        return cache[key]
+
+    moves = state.get_available_moves()
+    if not moves:
+        score = _endgame_score(state, ai_player_idx)
+        cache[key] = score
+        return score
+
+    maximizing = state.current_player_idx == ai_player_idx
+    if maximizing:
+        best_score = float('-inf')
+        for card, (row, col) in moves:
+            move_record = state.make_move(row, col, card)
+            if move_record is None:
+                continue
+            try:
+                best_score = max(best_score, _solve_endgame_exact(state, ai_player_idx, cache))
+            finally:
+                state.undo_move(move_record)
+    else:
+        best_score = float('inf')
+        for card, (row, col) in moves:
+            move_record = state.make_move(row, col, card)
+            if move_record is None:
+                continue
+            try:
+                best_score = min(best_score, _solve_endgame_exact(state, ai_player_idx, cache))
+            finally:
+                state.undo_move(move_record)
+
+    cache[key] = best_score
+    return best_score
+
+class ConsoleSearchReporter:
+    """节流输出服务端搜索速度，避免刷屏拖慢搜索。"""
+    def __init__(self, interval=0.5):
+        self.interval = interval
+        self.last_print = 0.0
+        self.endgame_nodes = 0
+        self.endgame_start = None
+
+    def on_minimax_progress(self, progress_info):
+        """打印 Minimax 实时速度。"""
+        now = time.time()
+        if now - self.last_print < self.interval:
+            return
+        self.last_print = now
+
+        stats = progress_info.get('stats', {})
+        elapsed = max(progress_info.get('time_elapsed', 0.0), 1e-6)
+        nodes = progress_info.get('nodes_searched', 0)
+        nps = nodes / elapsed
+        print(
+            f"[Search] depth={progress_info.get('depth')} "
+            f"nodes={nodes:,} nps={nps:,.0f} "
+            f"tt={stats.get('tt_hit_rate', 0) * 100:.1f}% "
+            f"cutoff={stats.get('cutoff_rate', 0) * 100:.1f}% "
+            f"elapsed={elapsed:.2f}s"
+        )
+
+    def start_endgame(self):
+        """开始记录信息集残局速度。"""
+        self.endgame_nodes = 0
+        self.endgame_start = time.time()
+        self.last_print = 0.0
+
+    def on_endgame_node(self, move_index, move_count, scenario_index, scenario_count):
+        """打印信息集残局实时速度。"""
+        self.endgame_nodes += 1
+        now = time.time()
+        if now - self.last_print < self.interval:
+            return
+        self.last_print = now
+        elapsed = max(now - (self.endgame_start or now), 1e-6)
+        print(
+            f"[Endgame] move={move_index}/{move_count} "
+            f"scenario={scenario_index}/{scenario_count} "
+            f"nodes={self.endgame_nodes:,} nps={self.endgame_nodes / elapsed:,.0f} "
+            f"elapsed={elapsed:.2f}s"
+        )
 
 def _best_immediate_reply_score(state_after_my_move, ai_player_idx):
     """计算对手对当前局面的最佳即时回应分数。"""
@@ -276,14 +609,20 @@ def _best_immediate_reply_score(state_after_my_move, ai_player_idx):
     return best_reply if best_reply != float('inf') else evaluate_state(state_after_my_move, ai_player_idx)
 
 def _evaluate_endgame_move_robustly(base_state, move, scenario_states, ai_player_idx,
-                                   safety_margin=0.75):
-    """对单个走法进行残局多样本鲁棒评分。"""
+                                   safety_margin=0.75, progress_reporter=None,
+                                   move_index=1, move_count=1):
+    """对单个走法进行信息集残局评分。"""
     card, (row, col) = move
     scenario_scores = []
     safety_votes = 0
     corner_risk = _calculate_corner_safety_risk(card, row, col, base_state.board, base_state.rules)
+    exact_cache = {}
+    use_exact_solver = _board_occupancy(base_state.board) >= 5
 
-    for scenario in scenario_states:
+    scenario_count = len(scenario_states)
+    for scenario_index, scenario in enumerate(scenario_states, start=1):
+        if progress_reporter:
+            progress_reporter.on_endgame_node(move_index, move_count, scenario_index, scenario_count)
         scenario_eval = evaluate_state(scenario, ai_player_idx)
         scenario_after = scenario.copy()
         scenario_card = next((c for c in scenario_after.current_player.hand if c.card_id == card.card_id), None)
@@ -292,34 +631,49 @@ def _evaluate_endgame_move_robustly(base_state, move, scenario_states, ai_player
         if scenario_after.make_move(row, col, scenario_card) is None:
             continue
 
-        reply_score = _best_immediate_reply_score(scenario_after, ai_player_idx)
+        if use_exact_solver:
+            reply_score = _solve_endgame_exact(scenario_after, ai_player_idx, cache=exact_cache)
+        else:
+            reply_score = _best_immediate_reply_score(scenario_after, ai_player_idx)
         scenario_scores.append(reply_score)
-        if reply_score >= scenario_eval - safety_margin:
+        if (use_exact_solver and reply_score >= 0) or (
+            not use_exact_solver and reply_score >= scenario_eval - safety_margin
+        ):
             safety_votes += 1
 
     if not scenario_scores:
-        return float('-inf'), 0.0, float('-inf')
+        return float('-inf'), 0.0, float('-inf'), corner_risk
 
     avg_score = sum(scenario_scores) / len(scenario_scores)
     worst_score = min(scenario_scores)
-    robust_score = avg_score * 0.65 + worst_score * 0.35
+    robust_score = avg_score * 0.45 + worst_score * 0.55
     safety_ratio = safety_votes / len(scenario_scores)
-    if _is_corner_position(row, col) and corner_risk >= 5.0 and safety_ratio < 0.8:
+    if not use_exact_solver and _is_corner_position(row, col) and corner_risk >= 5.0 and safety_ratio < 0.8:
         return float('-inf'), safety_ratio, float('-inf'), corner_risk
 
-    final_score = robust_score - (1.0 - safety_ratio) * 3.0 - corner_risk * 1.1
+    final_score = robust_score + safety_ratio * 2.0 - corner_risk * 0.15
     return final_score, safety_ratio, robust_score, corner_risk
 
-def select_endgame_robust_move(base_state, scenario_states, ai_player_idx):
+def select_endgame_robust_move(base_state, scenario_states, ai_player_idx, progress_reporter=None):
     """在残局场景中选择鲁棒性更强的走法。"""
     moves = base_state.get_available_moves()
     if not moves:
         return None, []
 
     scored_moves = []
-    for move in moves:
+    if progress_reporter:
+        progress_reporter.start_endgame()
+
+    move_count = len(moves)
+    for move_index, move in enumerate(moves, start=1):
         final_score, safety_ratio, robust_score, corner_risk = _evaluate_endgame_move_robustly(
-            base_state, move, scenario_states, ai_player_idx
+            base_state,
+            move,
+            scenario_states,
+            ai_player_idx,
+            progress_reporter=progress_reporter,
+            move_index=move_index,
+            move_count=move_count,
         )
         scored_moves.append({
             'move': move,
@@ -329,22 +683,26 @@ def select_endgame_robust_move(base_state, scenario_states, ai_player_idx):
             'corner_risk': corner_risk,
         })
 
-    safe_moves = [
+    fully_safe_moves = [item for item in scored_moves if item['safety_ratio'] >= 1.0]
+    safe_moves = fully_safe_moves or [
         item for item in scored_moves
-        if item['safety_ratio'] >= 0.5 and (
+        if item['safety_ratio'] >= 0.75 and (
             item['corner_risk'] < 5.0 or item['safety_ratio'] >= 0.8
         )
     ]
     ranked_moves = safe_moves if safe_moves else scored_moves
-    ranked_moves.sort(key=lambda item: (item['final_score'], item['safety_ratio'], item['robust_score']), reverse=True)
+    ranked_moves.sort(
+        key=lambda item: (item['safety_ratio'], item['final_score'], item['robust_score'], -item['corner_risk']),
+        reverse=True,
+    )
 
     best_item = ranked_moves[0]
     return best_item['move'], scored_moves
 
 def _should_use_endgame_robust_mode(board_state, opp_unknown_count):
-    """判断是否启用残局多样本鲁棒模式。"""
+    """判断是否启用信息集残局求解。"""
     occupied = _board_occupancy(board_state)
-    return occupied >= 6 and 0 < opp_unknown_count <= 2
+    return occupied >= 5 and opp_unknown_count <= 2
 
 def _move_key(move):
     card, (row, col) = move
@@ -1666,12 +2024,14 @@ def ai_move():
         # 检查是否请求详细搜索进度 (默认关闭以提升性能)
         show_search_progress = data.get('show_search_progress', False)
         search_progress_data = []
+        console_reporter = ConsoleSearchReporter(interval=0.5)
         opp_unknown_count = _count_unknown_slots_from_hand(opp_hand)
         use_endgame_robust = solver_type == 'minimax' and _should_use_endgame_robust_mode(board, opp_unknown_count)
         
         def progress_callback(progress_info):
             """轻量级搜索进度回调函数"""
             nonlocal search_progress_data
+            console_reporter.on_minimax_progress(progress_info)
             # 只在需要时才做复杂的数据处理
             if show_search_progress:
                 search_progress_data.append({
@@ -1716,12 +2076,12 @@ def ai_move():
                 all_cards=get_all_cards(),
                 open_mode=open_mode,
                 max_time=10,
-                progress_callback=progress_callback if show_search_progress else None
+                progress_callback=progress_callback
             )
 
             if use_endgame_robust:
                 opponent_player_idx = 0 if my_owner == 'blue' else 1
-                scenario_sample_count = min(8, max(5, opp_unknown_count * 3 + 2))
+                scenario_sample_count = 1 if opp_unknown_count == 0 else min(24, max(16, opp_unknown_count * 12))
                 scenario_states = _build_endgame_scenarios(
                     game_state,
                     opp_hand,
@@ -1735,7 +2095,8 @@ def ai_move():
                 robust_move, robust_candidates = select_endgame_robust_move(
                     game_state,
                     scenario_states,
-                    game_state.current_player_idx
+                    game_state.current_player_idx,
+                    progress_reporter=console_reporter
                 )
                 robust_lookup = {_move_key(item['move']): item for item in robust_candidates}
 
@@ -1747,15 +2108,16 @@ def ai_move():
                             standard_item['safety_ratio'] < 0.5 and robust_item['safety_ratio'] >= 0.5
                         ) or (
                             robust_item['safety_ratio'] > standard_item['safety_ratio'] and
-                            robust_item['final_score'] >= standard_item['final_score'] - 0.25
+                            robust_item['final_score'] >= standard_item['final_score'] - 1.0
                         ) or (
-                            robust_item['final_score'] > standard_item['final_score'] + 0.35
+                            robust_item['final_score'] > standard_item['final_score'] + 0.05
                         )
                         if should_override and _move_key(robust_move) != _move_key(move):
                             print(
-                                f"[Solver] 残局鲁棒覆盖: 标准={standard_item['final_score']:.3f}/"
+                                f"[Solver] 信息集残局覆盖: 标准={standard_item['final_score']:.3f}/"
                                 f"{standard_item['safety_ratio']:.2f}, "
-                                f"鲁棒={robust_item['final_score']:.3f}/{robust_item['safety_ratio']:.2f}"
+                                f"信息集={robust_item['final_score']:.3f}/{robust_item['safety_ratio']:.2f}, "
+                                f"场景={len(scenario_states)}"
                             )
                             move = robust_move
 

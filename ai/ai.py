@@ -25,6 +25,8 @@ HISTORY_TABLE = {}
 
 TIME_LIMIT = 5.0  # 默认5秒时间限制
 START_TIME = 0
+PROGRESS_LAST_TIME = 0.0
+PROGRESS_INTERVAL = 0.5
 
 # 搜索统计信息
 class SearchStats:
@@ -370,8 +372,24 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
            ai_player_idx: int, verbose: bool = False, is_root: bool = False, 
            history_table: Dict = None, path: List = None, progress_callback: Callable = None) -> SearchResult:
     """改进的极小极大搜索，使用make_move/undo_move机制避免深拷贝"""
-    global SEARCH_STATS
+    global SEARCH_STATS, PROGRESS_LAST_TIME
     SEARCH_STATS.nodes_searched += 1
+
+    if progress_callback:
+        now = time.time()
+        if now - PROGRESS_LAST_TIME >= PROGRESS_INTERVAL:
+            PROGRESS_LAST_TIME = now
+            progress_callback({
+                'phase': 'searching',
+                'depth': SEARCH_STATS.depth_completed + 1,
+                'max_depth': depth,
+                'best_move': None,
+                'best_score': 0.0,
+                'nodes_searched': SEARCH_STATS.nodes_searched,
+                'time_elapsed': time.time() - START_TIME,
+                'time_remaining': TIME_LIMIT - (time.time() - START_TIME),
+                'stats': SEARCH_STATS.get_summary()
+            })
     
     if path is None:
         path = []
@@ -516,9 +534,10 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
 def iterative_deepening_search(state: GameState, max_time: float, verbose: bool = False, 
                              max_depth: int = 100, progress_callback: Callable = None) -> Tuple:
     """增强的迭代加深搜索，包含详细进度显示"""
-    global START_TIME, TIME_LIMIT, SEARCH_STATS
+    global START_TIME, TIME_LIMIT, SEARCH_STATS, PROGRESS_LAST_TIME
     START_TIME = time.time()
     TIME_LIMIT = max_time
+    PROGRESS_LAST_TIME = 0.0
     
     # 重置搜索统计
     SEARCH_STATS.reset()
