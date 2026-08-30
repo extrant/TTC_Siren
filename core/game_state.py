@@ -420,11 +420,14 @@ class GameState:
             import pandas as pd
             import os
             # 尝试多个可能的路径
+            import sys as _sys
             possible_paths = [
+                os.path.join(_sys._MEIPASS, 'data', '幻卡数据库.csv') if getattr(_sys, 'frozen', False) else None,
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', '幻卡数据库.csv'),
                 os.path.join(os.getcwd(), 'data', '幻卡数据库.csv'),
                 'data/幻卡数据库.csv',
             ]
+            possible_paths = [p for p in possible_paths if p is not None]
             df = None
             for p in possible_paths:
                 if os.path.exists(p):

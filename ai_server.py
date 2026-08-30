@@ -28,7 +28,12 @@ def get_card_db():
     if _card_db is None:
         with _card_lock:
             if _card_db is None:
-                _card_db = pd.read_csv('data/幻卡数据库.csv')
+                import sys
+                if getattr(sys, 'frozen', False):
+                    path = os.path.join(sys._MEIPASS, 'data/幻卡数据库.csv')
+                else:
+                    path = os.path.join(os.path.abspath("."), 'data/幻卡数据库.csv')
+                _card_db = pd.read_csv(path)
     return _card_db
 
 def get_all_cards():
@@ -95,6 +100,52 @@ def parse_owner(owner):
 def find_card_id_by_stats(up, right, down, left):
     lookup = get_card_lookup()
     return lookup.get((up, right, down, left), None)
+
+def _parse_id_list(raw_ids):
+    """解析前端传来的卡牌 ID 列表，兼容数组和逗号分隔字符串。"""
+    if not raw_ids:
+        return []
+    if isinstance(raw_ids, str):
+        raw_ids = raw_ids.replace(';', ',').split(',')
+
+    result = []
+    for item in raw_ids:
+        try:
+            card_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if card_id > 0 and card_id not in result:
+            result.append(card_id)
+    return result
+
+def _parse_bool_flag(value):
+    """解析前端布尔开关，兼容 JSON bool 和字符串。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+def _clone_unknown_candidate(card, owner, type_map):
+    card_id = _base_card_id(card)
+    candidate = Card(
+        card.base_up,
+        card.base_right,
+        card.base_down,
+        card.base_left,
+        owner=owner,
+        card_id=card_id,
+        card_type=type_map.get(card_id),
+        can_use=True,
+    )
+    candidate._is_generated = True
+    candidate._is_prediction = True
+    return candidate
+
+def _format_guess_card_ids(cards):
+    if not cards:
+        return "[]"
+    return "[" + ", ".join(str(_base_card_id(card) or "?") for card in cards) + "]"
 
 def parse_board(board_json):
     board = Board()
@@ -293,7 +344,7 @@ def _is_legal_unknown_assignment(assignment, known_opp_cards, star_map):
 
     return high_star_count <= 2 and five_star_count <= 1
 
-def _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner):
+def _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner, candidate_card_ids=None):
     """枚举符合当前已知信息和卡组限制的对手未知牌候选。
 
     Args:
@@ -301,6 +352,7 @@ def _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner
         opp_hand: 对手当前手牌。
         board_state: 当前棋盘。
         opp_owner: 对手颜色。
+        candidate_card_ids: 可选候选牌库 ID；NPC 对局时用于限制未知牌来源。
 
     Returns:
         按数据库顺序生成的合法未知候选卡牌列表。
@@ -313,25 +365,17 @@ def _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner
 
     known_opp_cards = [card for card in opp_hand if not _is_generated_unknown_card(card)]
     candidate_cards = []
+    candidate_id_set = set(_parse_id_list(candidate_card_ids))
     for card in get_all_cards():
         card_id = _base_card_id(card)
+        if candidate_id_set and card_id not in candidate_id_set:
+            continue
         if card_id in known_global_ids:
             continue
 
-        candidate = Card(
-            card.base_up,
-            card.base_right,
-            card.base_down,
-            card.base_left,
-            owner=opp_owner,
-            card_id=card_id,
-            card_type=type_map.get(card_id),
-            can_use=True,
-        )
+        candidate = _clone_unknown_candidate(card, opp_owner, type_map)
         if not _is_legal_unknown_assignment([candidate], known_opp_cards, star_map):
             continue
-        candidate._is_generated = True
-        candidate._is_prediction = True
         candidate_cards.append(candidate)
 
     return candidate_cards
@@ -366,7 +410,7 @@ def _copy_state_with_unknown_assignment(base_state, opp_player_idx, unknown_indi
         opp_hand_copy[idx] = copied_card
     return scenario
 
-def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_state, opp_owner, opp_player_idx, sample_count):
+def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_state, opp_owner, opp_player_idx, sample_count, candidate_card_ids=None):
     """构建残局信息集场景，优先覆盖对手高威胁未知牌组合。
 
     Args:
@@ -378,6 +422,7 @@ def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_stat
         opp_owner: 对手颜色。
         opp_player_idx: 对手在 GameState.players 中的索引。
         sample_count: 最多构建的可能世界数量。
+        candidate_card_ids: 可选候选牌库 ID；NPC 对局时用于限制未知牌来源。
 
     Returns:
         一组 GameState 副本；无未知牌时仅返回当前局面。
@@ -390,11 +435,12 @@ def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_stat
         return [base_state]
 
     known_opp_hand = [card for card in opp_hand if not _is_generated_unknown_card(card)]
-    legal_candidates = _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner)
+    legal_candidates = _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner, candidate_card_ids)
     if legal_candidates:
         candidates = legal_candidates
+        source_label = "NPC pool" if candidate_card_ids else "database"
         print(
-            f"Endgame legal enumeration: {len(legal_candidates)} candidates "
+            f"Endgame legal enumeration ({source_label}): {len(legal_candidates)} candidates "
             f"for {len(unknown_indices)} unknown slots"
         )
     else:
@@ -610,7 +656,7 @@ def _best_immediate_reply_score(state_after_my_move, ai_player_idx):
 
 def _evaluate_endgame_move_robustly(base_state, move, scenario_states, ai_player_idx,
                                    safety_margin=0.75, progress_reporter=None,
-                                   move_index=1, move_count=1):
+                                   move_index=1, move_count=1, aggressive=False):
     """对单个走法进行信息集残局评分。"""
     card, (row, col) = move
     scenario_scores = []
@@ -646,15 +692,24 @@ def _evaluate_endgame_move_robustly(base_state, move, scenario_states, ai_player
 
     avg_score = sum(scenario_scores) / len(scenario_scores)
     worst_score = min(scenario_scores)
-    robust_score = avg_score * 0.45 + worst_score * 0.55
     safety_ratio = safety_votes / len(scenario_scores)
-    if not use_exact_solver and _is_corner_position(row, col) and corner_risk >= 5.0 and safety_ratio < 0.8:
+    if aggressive:
+        robust_score = avg_score * 0.75 + worst_score * 0.25
+        safety_bonus = safety_ratio * 0.75
+        corner_penalty = corner_risk * 0.05
+    else:
+        robust_score = avg_score * 0.45 + worst_score * 0.55
+        safety_bonus = safety_ratio * 2.0
+        corner_penalty = corner_risk * 0.15
+    corner_safety_threshold = 0.5 if aggressive else 0.8
+    if not use_exact_solver and _is_corner_position(row, col) and corner_risk >= 5.0 and safety_ratio < corner_safety_threshold:
         return float('-inf'), safety_ratio, float('-inf'), corner_risk
 
-    final_score = robust_score + safety_ratio * 2.0 - corner_risk * 0.15
+    final_score = robust_score + safety_bonus - corner_penalty
     return final_score, safety_ratio, robust_score, corner_risk
 
-def select_endgame_robust_move(base_state, scenario_states, ai_player_idx, progress_reporter=None):
+def select_endgame_robust_move(base_state, scenario_states, ai_player_idx, progress_reporter=None,
+                               aggressive=False):
     """在残局场景中选择鲁棒性更强的走法。"""
     moves = base_state.get_available_moves()
     if not moves:
@@ -674,6 +729,7 @@ def select_endgame_robust_move(base_state, scenario_states, ai_player_idx, progr
             progress_reporter=progress_reporter,
             move_index=move_index,
             move_count=move_count,
+            aggressive=aggressive,
         )
         scored_moves.append({
             'move': move,
@@ -683,18 +739,25 @@ def select_endgame_robust_move(base_state, scenario_states, ai_player_idx, progr
             'corner_risk': corner_risk,
         })
 
-    fully_safe_moves = [item for item in scored_moves if item['safety_ratio'] >= 1.0]
-    safe_moves = fully_safe_moves or [
-        item for item in scored_moves
-        if item['safety_ratio'] >= 0.75 and (
-            item['corner_risk'] < 5.0 or item['safety_ratio'] >= 0.8
+    if aggressive:
+        ranked_moves = scored_moves
+        ranked_moves.sort(
+            key=lambda item: (item['final_score'], item['robust_score'], item['safety_ratio'], -item['corner_risk']),
+            reverse=True,
         )
-    ]
-    ranked_moves = safe_moves if safe_moves else scored_moves
-    ranked_moves.sort(
-        key=lambda item: (item['safety_ratio'], item['final_score'], item['robust_score'], -item['corner_risk']),
-        reverse=True,
-    )
+    else:
+        fully_safe_moves = [item for item in scored_moves if item['safety_ratio'] >= 1.0]
+        safe_moves = fully_safe_moves or [
+            item for item in scored_moves
+            if item['safety_ratio'] >= 0.75 and (
+                item['corner_risk'] < 5.0 or item['safety_ratio'] >= 0.8
+            )
+        ]
+        ranked_moves = safe_moves if safe_moves else scored_moves
+        ranked_moves.sort(
+            key=lambda item: (item['safety_ratio'], item['final_score'], item['robust_score'], -item['corner_risk']),
+            reverse=True,
+        )
 
     best_item = ranked_moves[0]
     return best_item['move'], scored_moves
@@ -756,7 +819,7 @@ def _calculate_corner_safety_risk(card, row, col, board_state, rules):
 
     return risk * stage_weight
 
-def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_opponent=False, id_offset=1000, skip_sampling=False):
+def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_opponent=False, id_offset=1000, skip_sampling=False, candidate_card_ids=None, candidate_source_label=None):
     """
     解析手牌，智能处理未知卡牌
 
@@ -769,6 +832,8 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
         is_opponent: 是否为对手手牌（启用行为建模）
         id_offset: ID偏移量（已弃用）
         skip_sampling: 跳过智能采样，保留未知卡牌为占位符（蒙特卡洛求解器用）
+        candidate_card_ids: 可选候选牌库 ID；NPC 对局时用于限制对手未知牌来源
+        candidate_source_label: 可选候选来源标签；NPC 对局时用于日志说明
     """
     hand_slots = []
     known_cards = []
@@ -777,7 +842,11 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
 
     # 第一遍：解析所有槽位，保留原始顺序
     for item in hand_json:
+        in_hand = item.get('inHand', True)
         if all([item[k] == 0 for k in ['numU', 'numR', 'numD', 'numL']]):
+            if not in_hand:
+                continue
+
             hand_slots.append(("unknown", item))
             unknown_count += 1
         else:
@@ -788,6 +857,10 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
             card_type = type_map.get(card_id)
             c = Card(up, right, down, left, owner, card_id, card_type,
                     item.get('canUse', True))
+            if not in_hand:
+                used_cards.add(card_id)
+                continue
+
             hand_slots.append(("known", c))
             known_cards.append(c)
             used_cards.add(card_id)
@@ -804,7 +877,40 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
             ensure_handler_initialized()
             handler = get_unknown_card_handler()
 
-            if handler and rules:
+            if is_opponent and candidate_card_ids:
+                candidate_id_set = set(_parse_id_list(candidate_card_ids))
+                blocked_ids = set(used_cards)
+                if board_state:
+                    blocked_ids.update(_known_card_ids_on_board(board_state))
+
+                npc_candidates = []
+                star_map = get_card_star_map()
+                for card in get_all_cards():
+                    card_id = _base_card_id(card)
+                    if card_id not in candidate_id_set or card_id in blocked_ids:
+                        continue
+                    candidate = _clone_unknown_candidate(card, owner, type_map)
+                    if _is_legal_unknown_assignment([candidate], known_cards, star_map):
+                        npc_candidates.append(candidate)
+
+                if npc_candidates:
+                    generated_unknown_cards = _select_unknown_cards_for_slots(
+                        npc_candidates,
+                        unknown_count,
+                        board_state,
+                        rules,
+                        owner,
+                        is_opponent,
+                    )
+                    source_label = candidate_source_label or "NPC"
+                    print(
+                        f"{source_label} pool generated {len(generated_unknown_cards)} {card_type_label} cards "
+                        f"from {len(npc_candidates)} candidates for {unknown_count} unknown slots"
+                    )
+                    print(f"{source_label} card pool ids: {_parse_id_list(candidate_card_ids)}")
+                    print(f"{source_label} guessed card ids: {_format_guess_card_ids(generated_unknown_cards)}")
+
+            if not generated_unknown_cards and handler and rules:
                 if is_opponent:
                     unknown_cards = handler.generate_opponent_cards(
                         count=unknown_count,
@@ -835,7 +941,8 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
                     is_opponent,
                 )
                 print(f"Generated {len(generated_unknown_cards)} {card_type_label} cards for {unknown_count} unknown slots")
-            else:
+                print(f"Guessed {card_type_label} card ids: {_format_guess_card_ids(generated_unknown_cards)}")
+            elif not generated_unknown_cards:
                 print("Using fallback sampling for unknown cards")
                 all_cards = get_all_cards()
                 sample_size = min(unknown_count * 5, len(all_cards))
@@ -849,6 +956,7 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
                     for card in sampled_cards
                 ]
                 print(f"Fallback generated {len(generated_unknown_cards)} cards for {unknown_count} unknown slots")
+                print(f"Fallback guessed {card_type_label} card ids: {_format_guess_card_ids(generated_unknown_cards)}")
 
     # 第三遍：按原始顺序重建手牌
     hand = []
@@ -1959,6 +2067,17 @@ def ai_move():
         
         # 先解析规则，然后用于智能手牌处理
         rules, open_mode = parse_rules_and_open_mode(data.get('rules', ''))
+        aggressive_mode = _parse_bool_flag(data.get('aggressive', False))
+        npc_ids = _parse_id_list(data.get('npcIds', []))
+        npc_name = data.get('npcName') or 'unknown'
+        if aggressive_mode:
+            print("[Solver] 激进模式已启用")
+        if npc_ids:
+            print(f"NPC /ai_move card pool: name={npc_name}, count={len(npc_ids)}, ids={npc_ids}")
+        elif npc_name != 'unknown':
+            print(f"NPC /ai_move card pool: name={npc_name}, count=0, ids=[] (client sent no npcIds)")
+        else:
+            print("NPC /ai_move card pool: none received from client")
         
         # 选拔规则特殊处理：需要全局统计星级使用情况
         if '选拔' in rules:
@@ -1973,7 +2092,8 @@ def ai_move():
         mc_skip_sampling = (solver_type == 'monte_carlo')
         my_hand = parse_hand(data['myHand'], my_owner, used_cards, rules, board, is_opponent=False)
         opp_hand = parse_hand(data['oppHand'], opp_owner, used_cards, rules, board,
-                              is_opponent=True, skip_sampling=mc_skip_sampling)
+                              is_opponent=True, skip_sampling=mc_skip_sampling, candidate_card_ids=npc_ids,
+                              candidate_source_label=f"NPC {npc_name}" if npc_ids else None)
         # 玩家顺序：遵循GameState约定 - players[0]=红方, players[1]=蓝方
         # currentPlayer: 1=蓝方回合, 2=红方回合, 0=未知(兼容旧客户端)
         from core.player import Player
@@ -2071,12 +2191,13 @@ def ai_move():
             print("[Solver] 使用 Minimax 求解器")
             move, _ = find_best_move_parallel(
                 game_state,
-                max_depth=10,
+                max_depth=data.get('max_depth', 10),
                 verbose=False,
                 all_cards=get_all_cards(),
                 open_mode=open_mode,
-                max_time=10,
-                progress_callback=progress_callback
+                max_time=data.get('max_time', 10),
+                progress_callback=progress_callback,
+                aggressive=aggressive_mode
             )
 
             if use_endgame_robust:
@@ -2090,13 +2211,15 @@ def ai_move():
                     board,
                     opp_owner,
                     opponent_player_idx,
-                    scenario_sample_count
+                    scenario_sample_count,
+                    candidate_card_ids=npc_ids
                 )
                 robust_move, robust_candidates = select_endgame_robust_move(
                     game_state,
                     scenario_states,
                     game_state.current_player_idx,
-                    progress_reporter=console_reporter
+                    progress_reporter=console_reporter,
+                    aggressive=aggressive_mode
                 )
                 robust_lookup = {_move_key(item['move']): item for item in robust_candidates}
 
@@ -2104,14 +2227,20 @@ def ai_move():
                     standard_item = robust_lookup.get(_move_key(move))
                     robust_item = robust_lookup.get(_move_key(robust_move))
                     if standard_item and robust_item:
-                        should_override = (
-                            standard_item['safety_ratio'] < 0.5 and robust_item['safety_ratio'] >= 0.5
-                        ) or (
-                            robust_item['safety_ratio'] > standard_item['safety_ratio'] and
-                            robust_item['final_score'] >= standard_item['final_score'] - 1.0
-                        ) or (
-                            robust_item['final_score'] > standard_item['final_score'] + 0.05
-                        )
+                        if aggressive_mode:
+                            should_override = (
+                                robust_item['final_score'] > standard_item['final_score'] + 2.5
+                                and robust_item['safety_ratio'] >= 0.75
+                            )
+                        else:
+                            should_override = (
+                                standard_item['safety_ratio'] < 0.5 and robust_item['safety_ratio'] >= 0.5
+                            ) or (
+                                robust_item['safety_ratio'] > standard_item['safety_ratio'] and
+                                robust_item['final_score'] >= standard_item['final_score'] - 1.0
+                            ) or (
+                                robust_item['final_score'] > standard_item['final_score'] + 0.05
+                            )
                         if should_override and _move_key(robust_move) != _move_key(move):
                             print(
                                 f"[Solver] 信息集残局覆盖: 标准={standard_item['final_score']:.3f}/"

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from ai.ai import evaluate_move
+from ai.ai import evaluate_move, evaluate_state
 from ai_server import (
     _build_legal_unknown_candidates,
     _select_unknown_cards_for_slots,
@@ -180,6 +180,43 @@ class GameRuleTests(unittest.TestCase):
         late_score = evaluate_move((card, (0, 2)), late_state, {})
 
         self.assertLess(late_score, early_score)
+
+    def test_corner_edge_score_prefers_exposing_right_and_down_tens(self):
+        card = Card(6, 10, 10, 1, owner='red', card_id=75)
+        state = GameState(
+            Board(),
+            [Player('red', [card]), Player('blue', [])],
+            current_player_idx=0,
+            rules=[]
+        )
+
+        top_left_score = evaluate_move((card, (0, 0)), state, {})
+        bottom_left_score = evaluate_move((card, (2, 0)), state, {})
+
+        self.assertGreater(top_left_score, bottom_left_score)
+
+        top_left_board = Board()
+        top_left_board.place_card(0, 0, card.copy())
+        top_left_state = GameState(
+            top_left_board,
+            [Player('red', []), Player('blue', [])],
+            current_player_idx=1,
+            rules=[]
+        )
+
+        bottom_left_board = Board()
+        bottom_left_board.place_card(2, 0, card.copy())
+        bottom_left_state = GameState(
+            bottom_left_board,
+            [Player('red', []), Player('blue', [])],
+            current_player_idx=1,
+            rules=[]
+        )
+
+        self.assertGreater(
+            evaluate_state(top_left_state, ai_player_idx=0),
+            evaluate_state(bottom_left_state, ai_player_idx=0)
+        )
 
     def test_endgame_corner_safety_gate_filters_risky_corner(self):
         board = Board()

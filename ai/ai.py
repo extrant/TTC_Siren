@@ -8,13 +8,6 @@ import pandas as pd
 import random
 import math
 import time
-# 新增导入: 获取全局 UnknownCardHandler 以复用其角落评分逻辑
-try:
-    from ai.unknown_card_handler import get_unknown_card_handler  # type: ignore
-except Exception:
-    # 兼容运行时尚未初始化或包路径问题
-    def get_unknown_card_handler():
-        return None
 
 # 角落策略评分的全局权重，可根据实际效果调节
 CORNER_STRATEGY_WEIGHT = 5.0
@@ -102,6 +95,98 @@ def _count_occupied_cells(state: GameState) -> int:
                 occupied += 1
     return occupied
 
+def _aggressive_phase(occupied: int) -> str:
+    """根据棋盘进度返回激进模式阶段。"""
+    if occupied <= 2:
+        return "balanced"
+    if occupied <= 5:
+        return "hard"
+    return "ultra"
+
+
+def _aggressive_state_weights(state: GameState) -> Tuple[float, float, float]:
+    """返回激进模式下的局面评估权重。"""
+    phase = _aggressive_phase(_count_occupied_cells(state))
+    if phase == "balanced":
+        return 0.7, 0.3, 0.25
+    if phase == "hard":
+        return 0.9, 0.25, 0.15
+    return 1.15, 0.15, 0.05
+
+
+def _aggressive_move_weights(state: GameState) -> Tuple[float, float, float]:
+    """返回激进模式下的走法排序权重。"""
+    phase = _aggressive_phase(_count_occupied_cells(state))
+    if phase == "balanced":
+        return 1.0, 1.0, 1.0
+    if phase == "hard":
+        return 1.25, 0.65, 1.1
+    return 1.65, 0.35, 1.25
+
+
+def _exposed_directions(row: int, col: int) -> List[str]:
+    """返回指定落点会暴露给相邻格子的方向。
+
+    Args:
+        row: 棋盘行号。
+        col: 棋盘列号。
+
+    Returns:
+        会被相邻格子攻击到的方向列表。
+    """
+    exposed = []
+    if row > 0:
+        exposed.append("up")
+    if col < 2:
+        exposed.append("right")
+    if row < 2:
+        exposed.append("down")
+    if col > 0:
+        exposed.append("left")
+    return exposed
+
+
+def _calculate_placement_edge_score(card, row: int, col: int, rules: List[str]) -> float:
+    """按具体落点评分卡牌边值朝向。
+
+    Args:
+        card: 待落子的卡牌。
+        row: 棋盘行号。
+        col: 棋盘列号。
+        rules: 当前规则列表。
+
+    Returns:
+        当前落点的边值朝向分，正数表示强边暴露、弱边隐藏更好。
+    """
+    exposed = set(_exposed_directions(row, col))
+    hidden = {"up", "right", "down", "left"} - exposed
+    score = 0.0
+
+    for direction in exposed:
+        value = card.get_effective_value(direction, rules)
+        if value >= 8:
+            score += (value - 7) * 3.0
+        elif value <= 3:
+            score -= (4 - value) * 4.0
+        elif value <= 5:
+            score -= (6 - value) * 1.0
+
+    for direction in hidden:
+        value = card.get_effective_value(direction, rules)
+        if value <= 3:
+            score += (4 - value) * 2.5
+        elif value >= 8:
+            score -= (value - 7) * 2.0
+
+    if len(exposed) == 2:
+        exposed_values = [card.get_effective_value(direction, rules) for direction in exposed]
+        if all(value >= 8 for value in exposed_values):
+            score += 8.0
+        if any(value <= 3 for value in exposed_values):
+            score -= 4.0
+
+    return score
+
 
 def _calculate_endgame_exposure_penalty(card, row: int, col: int, state: GameState) -> float:
     """计算残局阶段的边值暴露惩罚。"""
@@ -147,7 +232,7 @@ def _calculate_endgame_exposure_penalty(card, row: int, col: int, state: GameSta
     return penalty * stage_weight
 
 
-def evaluate_state(state: GameState, ai_player_idx: int) -> float:
+def evaluate_state(state: GameState, ai_player_idx: int, aggressive: bool = False) -> float:
     """改进的评估函数"""
     red_count, blue_count = state.count_cards()
     
@@ -164,12 +249,7 @@ def evaluate_state(state: GameState, ai_player_idx: int) -> float:
     }
     
     position_score = 0
-    corner_edge_score = 0.0  # 新增：角落边值综合评分
-    handler = None
-    try:
-        handler = get_unknown_card_handler()
-    except Exception:
-        pass
+    placement_edge_score = 0.0
     for r in range(3):
         for c in range(3):
             card = state.board.get_card(r, c)
@@ -178,24 +258,17 @@ def evaluate_state(state: GameState, ai_player_idx: int) -> float:
                 if (card.owner == 'red' and ai_player_idx == 0) or \
                    (card.owner == 'blue' and ai_player_idx == 1):
                     position_score += weight
-                    # 角落边值加分（仅己方卡牌）
-                    if handler and (r, c) in [(0,0),(0,2),(2,0),(2,2)]:
-                        try:
-                            cs = handler._calculate_corner_strategy_score(card, state.board)
-                            corner_edge_score += cs * (CORNER_STRATEGY_WEIGHT * 0.6)  # 在总评估中权重稍低
-                        except Exception:
-                            pass
+                    placement_edge_score += _calculate_placement_edge_score(card, r, c, state.rules)
                 else:
                     position_score -= weight
-                    # 对手角落高边则扣分
-                    if handler and (r, c) in [(0,0),(0,2),(2,0),(2,2)]:
-                        try:
-                            cs = handler._calculate_corner_strategy_score(card, state.board)
-                            corner_edge_score -= cs * (CORNER_STRATEGY_WEIGHT * 0.6)
-                        except Exception:
-                            pass
+                    placement_edge_score -= _calculate_placement_edge_score(card, r, c, state.rules)
     
-    return base_score * 0.7 + position_score * 0.3 + corner_edge_score * 0.1
+    if aggressive:
+        base_weight, position_weight, edge_weight = _aggressive_state_weights(state)
+    else:
+        base_weight, position_weight, edge_weight = 0.7, 0.3, 0.25
+
+    return base_score * base_weight + position_score * position_weight + placement_edge_score * edge_weight
 
 
 r"""
@@ -270,12 +343,13 @@ Score_{final} = min(\frac{Score_{raw}}{1000}, 1.0) \cdot 1000
 
 """
 
-def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
+def evaluate_move(move: Tuple, state: GameState, history_table: Dict, aggressive: bool = False) -> float:
     """
     综合评估移动的分数，融合历史启发和启发式评估
     """
     card, (row, col) = move
     score = 0.0
+    capture_weight, exposure_weight, power_weight = _aggressive_move_weights(state) if aggressive else (1.0, 1.0, 1.0)
     
     # 1. 历史启发表分数 (基础权重 0.1)
     history_score = history_table.get((card.card_id, row, col), 0)
@@ -290,6 +364,9 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
         star = get_card_star_map().get(card.card_id, 0)
         
     card_edges = [card.up, card.down, card.left, card.right]
+    if aggressive:
+        card_power = sum(card_edges) + (star or 0) * 3
+        score += card_power * power_weight
     
     # 高星级卡牌在角落的评估
     if star == 3 and card_edges.count(8) >= 2 and (row, col) in [(0,0),(0,2),(2,0),(2,2)]:
@@ -320,13 +397,15 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
                     my_value = getattr(card, my_dir)
                     opp_value = getattr(opp_card, opp_dir)
                     diff = abs(my_value - opp_value)
-                    score += 30.0 + diff * 5.0  # 基础吃子分30，每点数值差加5
+                    capture_score = 30.0 + diff * 5.0  # 基础吃子分30，每点数值差加5
                     
                     # 如果是高星级卡吃低星级卡，额外加分
                     if star and hasattr(opp_card, 'card_id'):
                         opp_star = get_card_star_map().get(opp_card.card_id, 0)
                         if star > opp_star:
-                            score += (star - opp_star) * 10.0
+                            capture_score += (star - opp_star) * 10.0
+
+                    score += capture_score * capture_weight
     
     # 5. 边缘保护评估 (权重 1.0)
     # 检查是否有己方卡牌在相邻位置
@@ -337,26 +416,19 @@ def evaluate_move(move: Tuple, state: GameState, history_table: Dict) -> float:
             if adj_card and adj_card.owner == card.owner:
                 score += 10.0  # 相邻己方卡牌
 
-    # 6. 角落/高边战略评分 (新增)
-    try:
-        handler = get_unknown_card_handler()
-        if handler and hasattr(handler, "_calculate_corner_strategy_score"):
-            corner_score = handler._calculate_corner_strategy_score(card, state.board)
-            score += corner_score * CORNER_STRATEGY_WEIGHT
-    except Exception:
-        # 若处理器未初始化或计算失败，忽略该评分
-        pass
+    # 6. 具体落点的高边暴露/弱边隐藏评分
+    score += _calculate_placement_edge_score(card, row, col, state.rules) * CORNER_STRATEGY_WEIGHT
 
     # 7. 残局暴露面惩罚
-    score -= _calculate_endgame_exposure_penalty(card, row, col, state)
+    score -= _calculate_endgame_exposure_penalty(card, row, col, state) * exposure_weight
 
     return float(min(score, 1000.0))  # 确保最终分数不会过大
 
-def order_moves(moves: List[Tuple], state: GameState, history_table: Dict) -> List[Tuple]:
+def order_moves(moves: List[Tuple], state: GameState, history_table: Dict, aggressive: bool = False) -> List[Tuple]:
     """
     使用综合评估函数对移动进行排序
     """
-    return sorted(moves, key=lambda move: evaluate_move(move, state, history_table), reverse=True)
+    return sorted(moves, key=lambda move: evaluate_move(move, state, history_table, aggressive), reverse=True)
 
 def get_state_hash(state: GameState) -> str:
     """生成状态的哈希值"""
@@ -370,7 +442,8 @@ def is_time_up() -> bool:
 
 def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing: bool, 
            ai_player_idx: int, verbose: bool = False, is_root: bool = False, 
-           history_table: Dict = None, path: List = None, progress_callback: Callable = None) -> SearchResult:
+           history_table: Dict = None, path: List = None, progress_callback: Callable = None,
+           aggressive: bool = False) -> SearchResult:
     """改进的极小极大搜索，使用make_move/undo_move机制避免深拷贝"""
     global SEARCH_STATS, PROGRESS_LAST_TIME
     SEARCH_STATS.nodes_searched += 1
@@ -398,11 +471,11 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
         
     # 检查时间限制
     if is_time_up():
-        return SearchResult(evaluate_state(state, ai_player_idx), None, path)
+        return SearchResult(evaluate_state(state, ai_player_idx, aggressive), None, path)
         
     # 检查终止条件
     if depth == 0 or state.is_game_over():
-        return SearchResult(evaluate_state(state, ai_player_idx), None, path)
+        return SearchResult(evaluate_state(state, ai_player_idx, aggressive), None, path)
         
     # 置换表查找
     state_hash = get_state_hash(state)
@@ -419,10 +492,10 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
              for pos in state.board.available_positions()]
              
     if not moves:
-        return SearchResult(evaluate_state(state, ai_player_idx), None, path)
+        return SearchResult(evaluate_state(state, ai_player_idx, aggressive), None, path)
         
     # 移动排序
-    moves = order_moves(moves, state, history_table)
+    moves = order_moves(moves, state, history_table, aggressive)
     
     best_move = None
     best_path = []
@@ -446,7 +519,7 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
             
             try:
                 result = minimax(state, depth-1, alpha, beta, False, ai_player_idx, 
-                               verbose, False, history_table, path + [move], progress_callback)
+                               verbose, False, history_table, path + [move], progress_callback, aggressive)
                                
                 if result.eval_score > max_eval:
                     max_eval = result.eval_score
@@ -497,7 +570,7 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
             
             try:
                 result = minimax(state, depth-1, alpha, beta, True, ai_player_idx,
-                               verbose, False, history_table, path + [move], progress_callback)
+                               verbose, False, history_table, path + [move], progress_callback, aggressive)
                                
                 if result.eval_score < min_eval:
                     min_eval = result.eval_score
@@ -532,7 +605,8 @@ def minimax(state: GameState, depth: int, alpha: float, beta: float, maximizing:
         return SearchResult(min_eval, best_move, best_path, {'branching_factor': branching_factor})
 
 def iterative_deepening_search(state: GameState, max_time: float, verbose: bool = False, 
-                             max_depth: int = 100, progress_callback: Callable = None) -> Tuple:
+                             max_depth: int = 100, progress_callback: Callable = None,
+                             aggressive: bool = False) -> Tuple:
     """增强的迭代加深搜索，包含详细进度显示"""
     global START_TIME, TIME_LIMIT, SEARCH_STATS, PROGRESS_LAST_TIME
     START_TIME = time.time()
@@ -564,7 +638,8 @@ def iterative_deepening_search(state: GameState, max_time: float, verbose: bool 
             print(f"剩余时间: {remaining_time:.2f}秒")
             
         result = minimax(state, depth, float('-inf'), float('inf'), True,
-                        state.current_player_idx, verbose, True, history_table, progress_callback=progress_callback)
+                        state.current_player_idx, verbose, True, history_table,
+                        progress_callback=progress_callback, aggressive=aggressive)
                         
         depth_end_time = time.time()
         depth_time = depth_end_time - depth_start_time
@@ -679,7 +754,8 @@ def format_move_display(move):
     return f"卡牌U{card.up}R{card.right}D{card.down}L{card.left}(★{star}) → 位置({row},{col})"
 
 def find_best_move_parallel(game_state: GameState, max_depth: int = 9, verbose: bool = False, max_time: float = 5,
-                          all_cards=None, n_jobs=None, progress_callback=None, open_mode='none'):
+                          all_cards=None, n_jobs=None, progress_callback=None, open_mode='none',
+                          aggressive: bool = False):
     """并行搜索入口，增强进度显示"""
     # 清理全局状态
     global TRANSPOSITION_TABLE
@@ -691,7 +767,8 @@ def find_best_move_parallel(game_state: GameState, max_depth: int = 9, verbose: 
         max_time=max_time,  # 5秒时间限制
         verbose=verbose,
         max_depth=min(max_depth, 100),  # 确保不超过100层
-        progress_callback=progress_callback
+        progress_callback=progress_callback,
+        aggressive=aggressive
     )
     
     return best_move, best_path 
