@@ -14,6 +14,8 @@ import random
 import itertools
 import time
 
+from console_ui import ui as console_ui, SearchReporter as ConsoleSearchReporter
+
 # 全局缓存和唯一ID查找表
 _card_db = None
 _all_cards = None
@@ -256,9 +258,8 @@ def _select_unknown_cards_for_slots(candidates, slot_count, board_state, rules, 
         reverse=True,
     )
     selected = ranked[:slot_count]
-    print(
-        f"Endgame risk selection: {len(candidates)} candidates → {slot_count} slots "
-        f"(occupied={occupied}/9)"
+    console_ui.update_thinking(
+        f"残局风险选牌: {len(candidates)}候选→{slot_count}槽位 (占用{occupied}/9)"
     )
     return selected
 
@@ -438,10 +439,9 @@ def _build_endgame_scenarios(base_state, opp_hand, used_cards, rules, board_stat
     legal_candidates = _build_legal_unknown_candidates(base_state, opp_hand, board_state, opp_owner, candidate_card_ids)
     if legal_candidates:
         candidates = legal_candidates
-        source_label = "NPC pool" if candidate_card_ids else "database"
-        print(
-            f"Endgame legal enumeration ({source_label}): {len(legal_candidates)} candidates "
-            f"for {len(unknown_indices)} unknown slots"
+        source_label = "NPC卡池" if candidate_card_ids else "数据库"
+        console_ui.update_thinking(
+            f"残局合法枚举({source_label}): {len(legal_candidates)}候选/{len(unknown_indices)}未知槽位"
         )
     else:
         candidates = handler.generate_opponent_cards(
@@ -584,54 +584,6 @@ def _solve_endgame_exact(state, ai_player_idx, cache=None):
 
     cache[key] = best_score
     return best_score
-
-class ConsoleSearchReporter:
-    """节流输出服务端搜索速度，避免刷屏拖慢搜索。"""
-    def __init__(self, interval=0.5):
-        self.interval = interval
-        self.last_print = 0.0
-        self.endgame_nodes = 0
-        self.endgame_start = None
-
-    def on_minimax_progress(self, progress_info):
-        """打印 Minimax 实时速度。"""
-        now = time.time()
-        if now - self.last_print < self.interval:
-            return
-        self.last_print = now
-
-        stats = progress_info.get('stats', {})
-        elapsed = max(progress_info.get('time_elapsed', 0.0), 1e-6)
-        nodes = progress_info.get('nodes_searched', 0)
-        nps = nodes / elapsed
-        print(
-            f"[Search] depth={progress_info.get('depth')} "
-            f"nodes={nodes:,} nps={nps:,.0f} "
-            f"tt={stats.get('tt_hit_rate', 0) * 100:.1f}% "
-            f"cutoff={stats.get('cutoff_rate', 0) * 100:.1f}% "
-            f"elapsed={elapsed:.2f}s"
-        )
-
-    def start_endgame(self):
-        """开始记录信息集残局速度。"""
-        self.endgame_nodes = 0
-        self.endgame_start = time.time()
-        self.last_print = 0.0
-
-    def on_endgame_node(self, move_index, move_count, scenario_index, scenario_count):
-        """打印信息集残局实时速度。"""
-        self.endgame_nodes += 1
-        now = time.time()
-        if now - self.last_print < self.interval:
-            return
-        self.last_print = now
-        elapsed = max(now - (self.endgame_start or now), 1e-6)
-        print(
-            f"[Endgame] move={move_index}/{move_count} "
-            f"scenario={scenario_index}/{scenario_count} "
-            f"nodes={self.endgame_nodes:,} nps={self.endgame_nodes / elapsed:,.0f} "
-            f"elapsed={elapsed:.2f}s"
-        )
 
 def _best_immediate_reply_score(state_after_my_move, ai_player_idx):
     """计算对手对当前局面的最佳即时回应分数。"""
@@ -869,11 +821,11 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
 
     # 第二遍：智能处理未知卡牌（或跳过采样保留占位符）
     if unknown_count > 0:
+        card_type_label = "对手" if is_opponent else "己方"
         if skip_sampling:
-            print(f"Skipped sampling: kept {unknown_count} unknown cards as placeholders for Monte Carlo")
+            console_ui.update_input(params={f"未知牌({card_type_label})": f"{unknown_count}张，保留占位符(蒙特卡洛)"})
         else:
-            card_type_label = "opponent" if is_opponent else "own"
-            print(f"Processing {unknown_count} unknown {card_type_label} cards for {owner}")
+            console_ui.update_input(params={f"未知牌({card_type_label})": f"处理{unknown_count}张，归属{owner}"})
             ensure_handler_initialized()
             handler = get_unknown_card_handler()
 
@@ -903,12 +855,13 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
                         is_opponent,
                     )
                     source_label = candidate_source_label or "NPC"
-                    print(
-                        f"{source_label} pool generated {len(generated_unknown_cards)} {card_type_label} cards "
-                        f"from {len(npc_candidates)} candidates for {unknown_count} unknown slots"
-                    )
-                    print(f"{source_label} card pool ids: {_parse_id_list(candidate_card_ids)}")
-                    print(f"{source_label} guessed card ids: {_format_guess_card_ids(generated_unknown_cards)}")
+                    console_ui.update_input(params={
+                        f"未知牌({card_type_label})": (
+                            f"{source_label}卡池生成{len(generated_unknown_cards)}张"
+                            f"(候选{len(npc_candidates)}/槽位{unknown_count})，"
+                            f"推测: {_format_guess_card_ids(generated_unknown_cards)}"
+                        )
+                    })
 
             if not generated_unknown_cards and handler and rules:
                 if is_opponent:
@@ -940,10 +893,14 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
                     owner,
                     is_opponent,
                 )
-                print(f"Generated {len(generated_unknown_cards)} {card_type_label} cards for {unknown_count} unknown slots")
-                print(f"Guessed {card_type_label} card ids: {_format_guess_card_ids(generated_unknown_cards)}")
+                console_ui.update_input(params={
+                    f"未知牌({card_type_label})": (
+                        f"生成{len(generated_unknown_cards)}张/槽位{unknown_count}，"
+                        f"推测: {_format_guess_card_ids(generated_unknown_cards)}"
+                    )
+                })
             elif not generated_unknown_cards:
-                print("Using fallback sampling for unknown cards")
+                console_ui.update_input(params={f"未知牌({card_type_label})": "使用兜底随机采样"})
                 all_cards = get_all_cards()
                 sample_size = min(unknown_count * 5, len(all_cards))
                 sampled_cards = random.sample(all_cards, sample_size)
@@ -955,8 +912,12 @@ def parse_hand(hand_json, owner, used_cards, rules=None, board_state=None, is_op
                          card.card_id, card.card_type, True)
                     for card in sampled_cards
                 ]
-                print(f"Fallback generated {len(generated_unknown_cards)} cards for {unknown_count} unknown slots")
-                print(f"Fallback guessed {card_type_label} card ids: {_format_guess_card_ids(generated_unknown_cards)}")
+                console_ui.update_input(params={
+                    f"未知牌({card_type_label})": (
+                        f"兜底生成{len(generated_unknown_cards)}张/槽位{unknown_count}，"
+                        f"推测: {_format_guess_card_ids(generated_unknown_cards)}"
+                    )
+                })
 
     # 第三遍：按原始顺序重建手牌
     hand = []
@@ -985,7 +946,6 @@ def parse_rules_and_open_mode(rules_str):
     rules = []
     open_mode = 'none'
     # 规则识别
-    print(rules_str)
     if '全明牌' in rules_str:
         open_mode = 'all'
     elif '三明牌' in rules_str:
@@ -1871,40 +1831,24 @@ def format_card_display(card, star):
 
 def _print_type_analysis(game_state):
     """
-    打印同类强化/弱化的详细分析
+    汇总同类强化/弱化分析，写入控制台面板（不逐行打印）
     """
     # 统计棋盘上已设置的各类型数量。手牌会受到修正影响，但不增加修正层数。
     board_type_counts = {}
-    
-    # 棋盘卡牌
-    print("棋盘卡牌类型分布：")
     for r in range(3):
         for c in range(3):
             card = game_state.board.get_card(r, c)
             if card and card.card_type:
                 board_type_counts[card.card_type] = board_type_counts.get(card.card_type, 0) + 1
-                modifier_info = f"(修正{card.type_modifier:+d})" if card.type_modifier != 0 else ""
-                print(f"  位置({r},{c}): {card.card_type} {modifier_info}")
-    
-    # 手牌类型
-    print("\n手牌类型分布：")
-    for i, player in enumerate(game_state.players):
-        player_name = "红方" if i == 0 else "蓝方"
-        print(f"  {player_name}手牌：")
-        for hand_card in player.hand:
-            if hand_card.card_type:
-                modifier_info = f"(修正{hand_card.type_modifier:+d})" if hand_card.type_modifier != 0 else ""
-                is_unknown = getattr(hand_card, '_is_prediction', False) or \
-                           (hand_card.up == 0 and hand_card.right == 0 and hand_card.down == 0 and hand_card.left == 0)
-                unknown_info = " [推测]" if is_unknown else " [已知]"
-                print(f"    {hand_card.card_type}{modifier_info}{unknown_info}")
-    
-    # 总计
-    print(f"\n类型总计：")
-    for card_type, count in board_type_counts.items():
-        rule_type = "强化" if '同类强化' in game_state.rules else "弱化"
-        modifier = count if '同类强化' in game_state.rules else -count
-        print(f"  {card_type}: 场上{count}张 → {rule_type}{modifier:+d}")
+
+    rule_type = "强化" if '同类强化' in game_state.rules else "弱化"
+    totals = [
+        f"{card_type}: 场上{count}张→{rule_type}{(count if rule_type == '强化' else -count):+d}"
+        for card_type, count in board_type_counts.items()
+    ]
+    console_ui.update_input(params={
+        "同类分析": '; '.join(totals) if totals else "棋盘暂无同类型卡牌"
+    })
 
 def analyze_corner_strategy(card, position, board):
     """
@@ -2054,37 +1998,38 @@ def ai_move():
         data = request.get_json()
         if not data or 'board' not in data or 'myHand' not in data or 'oppHand' not in data or 'myOwner' not in data:
             return jsonify({'error': 'Invalid input data'}), 400
+        console_ui.begin_request("ai_move", label="求解中")
         used_cards = set()
         board = parse_board(data['board'])
-        print("收到客户端消息的棋盘：")
-        print(board)
+        console_ui.update_input(board=board)
         my_owner = parse_owner(data['myOwner'])
         if my_owner == 'red':
             opp_owner = 'blue'
         else:
             opp_owner = 'red'
-        print(data['oppHand'])
-        
+
         # 先解析规则，然后用于智能手牌处理
         rules, open_mode = parse_rules_and_open_mode(data.get('rules', ''))
+        console_ui.update_input(rules=rules)
         aggressive_mode = _parse_bool_flag(data.get('aggressive', False))
         npc_ids = _parse_id_list(data.get('npcIds', []))
         npc_name = data.get('npcName') or 'unknown'
-        if aggressive_mode:
-            print("[Solver] 激进模式已启用")
         if npc_ids:
-            print(f"NPC /ai_move card pool: name={npc_name}, count={len(npc_ids)}, ids={npc_ids}")
+            npc_note = f"{npc_name} ({len(npc_ids)}张: {npc_ids})"
         elif npc_name != 'unknown':
-            print(f"NPC /ai_move card pool: name={npc_name}, count=0, ids=[] (client sent no npcIds)")
+            npc_note = f"{npc_name} (客户端未提供卡池ID)"
         else:
-            print("NPC /ai_move card pool: none received from client")
-        
+            npc_note = "无"
+        console_ui.update_input(params={
+            "模式": "激进" if aggressive_mode else "标准",
+            "NPC卡池": npc_note,
+        })
+
         # 选拔规则特殊处理：需要全局统计星级使用情况
         if '选拔' in rules:
-            print("检测到选拔规则，启动全局星级约束分析")
             # 先统计棋盘和已知手牌的星级使用情况
             global_star_usage = analyze_global_star_usage(board, data['myHand'], data['oppHand'])
-            print(f"全局星级使用情况: {global_star_usage}")
+            console_ui.update_input(params={"选拔星级使用": str(global_star_usage)})
         
         # 使用智能手牌解析，对对手手牌启用行为建模
         # 蒙特卡洛模式下跳过对手手牌采样（求解器内部自行处理未知卡牌）
@@ -2132,19 +2077,20 @@ def ai_move():
                 current_player_idx = 0  # 平局, 默认红方(先手)回合
 
         is_my_turn = (my_owner == 'red' and current_player_idx == 0) or (my_owner == 'blue' and current_player_idx == 1)
-        print(f"[Turn] my_owner={my_owner}, currentPlayer={current_player}, current_player_idx={current_player_idx}, is_my_turn={is_my_turn}")
+        console_ui.update_input(params={
+            "回合": f"我方={my_owner}, currentPlayer={current_player}, 当前索引={current_player_idx}, 我方回合={is_my_turn}"
+        })
         game_state = GameState(board, players, current_player_idx=current_player_idx, rules=rules)
-        
+
         # 如果有同类强化/弱化规则，立即处理
         if '同类强化' in rules or '同类弱化' in rules:
             game_state.recalculate_type_modifiers()
-            print(f"应用同类规则后的类型分析：")
             _print_type_analysis(game_state)
         
         # 检查是否请求详细搜索进度 (默认关闭以提升性能)
         show_search_progress = data.get('show_search_progress', False)
         search_progress_data = []
-        console_reporter = ConsoleSearchReporter(interval=0.5)
+        console_reporter = ConsoleSearchReporter(console_ui, interval=0.5)
         opp_unknown_count = _count_unknown_slots_from_hand(opp_hand)
         use_endgame_robust = solver_type == 'minimax' and _should_use_endgame_robust_mode(board, opp_unknown_count)
         
@@ -2167,28 +2113,23 @@ def ai_move():
                     'cutoff_rate': round(progress_info['stats']['cutoff_rate'] * 100, 1),
                     'branching_factor': round(progress_info['stats']['avg_branching_factor'], 2)
                 })
-                
-                # 输出详细进度（仅在明确请求时）
-                print(f"搜索进度更新 - 深度 {progress_info['depth']}: "
-                      f"评分={progress_info['best_score']:.3f}, "
-                      f"节点={progress_info['nodes_searched']:,}, "
-                      f"时间={progress_info['time_elapsed']:.2f}秒")
         
         # 选择求解器（solver_type 已在上面读取）
         mc_simulations = data.get('mc_simulations', 150)  # 蒙特卡洛模拟次数
 
         if solver_type == 'monte_carlo':
-            print(f"[Solver] 使用蒙特卡洛求解器 (simulations={mc_simulations})")
+            console_ui.update_input(params={"求解器": f"蒙特卡洛 (simulations={mc_simulations})"})
+            console_ui.update_thinking(f"蒙特卡洛求解中 (simulations={mc_simulations})")
             move, _ = monte_carlo_best_move(
                 game_state,
                 all_cards=get_all_cards(),
                 my_owner=my_owner,
                 time_limit=8,
                 base_simulations=mc_simulations,
-                verbose=True
+                verbose=False
             )
         else:
-            print("[Solver] 使用 Minimax 求解器")
+            console_ui.update_input(params={"求解器": "Minimax"})
             move, _ = find_best_move_parallel(
                 game_state,
                 max_depth=data.get('max_depth', 10),
@@ -2242,8 +2183,8 @@ def ai_move():
                                 robust_item['final_score'] > standard_item['final_score'] + 0.05
                             )
                         if should_override and _move_key(robust_move) != _move_key(move):
-                            print(
-                                f"[Solver] 信息集残局覆盖: 标准={standard_item['final_score']:.3f}/"
+                            console_ui.update_thinking(
+                                f"信息集残局覆盖: 标准={standard_item['final_score']:.3f}/"
                                 f"{standard_item['safety_ratio']:.2f}, "
                                 f"信息集={robust_item['final_score']:.3f}/{robust_item['safety_ratio']:.2f}, "
                                 f"场景={len(scenario_states)}"
@@ -2251,28 +2192,24 @@ def ai_move():
                             move = robust_move
 
         if move is None:
+            console_ui.end_request("无可用动作")
             return jsonify({'move': None, 'msg': '无可用动作'})
-            
+
         card, (row, col) = move
-        
+
         # 分析对手手牌
         opponent_analysis = analyze_opponent_hand(opp_hand, rules, board)
-        
-        # 调试信息：输出对手手牌分析结果
-        print(f"对手手牌分析: 总计{len(opp_hand)}张卡牌, 其中{opponent_analysis.get('total_unknown', 0)}张未知")
-        
+
         # 计算胜率
         win_prob = calculate_win_probability(game_state, move, my_owner)
-        
+
         # 生成AI建议
         recommendation = generate_move_recommendation(game_state, move, my_owner)
-        
-        # 打印AI给出结果后的棋盘
+
+        # 落子后的预测棋盘
         new_state = game_state.copy()
         new_state.play_move(row, col, card)
-        print("AI给出结果后的棋盘：")
-        print(new_state.board)
-        
+
         # 性能统计
         from ai.ai import SEARCH_STATS
         performance_stats = {
@@ -2283,20 +2220,32 @@ def ai_move():
             'unknown_cards_processed': opponent_analysis.get('total_unknown', 0),
             'performance_optimizations_active': True  # 标记优化已激活
         }
-        
-        print(f"性能统计:")
-        print(f"  搜索节点: {performance_stats['nodes_searched']:,}")
-        print(f"  搜索深度: {performance_stats['search_depth']}")
-        print(f"  置换表命中率: {performance_stats['tt_hit_rate']:.1f}%")
-        print(f"  α-β剪枝率: {performance_stats['cutoff_rate']:.1f}%")
-        print(f"  未知卡牌处理: {performance_stats['unknown_cards_processed']} 张")
-        
+
         star_map = get_card_star_map()
         star = star_map.get(card.card_id, '?')
-        
+
         # 生成卡牌显示信息（包含原始和修正后的数值）
         card_display = format_card_display(card, star)
-        
+
+        console_ui.update_output(
+            board=new_state.board,
+            decision=f"{card_display} → ({row},{col})",
+            confidence=(
+                f"当前{win_prob['current']:.1%} 落子后{win_prob['after_move']:.1%} "
+                f"(置信度{win_prob['confidence']:.2f})"
+            ),
+            extra={
+                "对手手牌": f"共{len(opp_hand)}张，未知{opponent_analysis.get('total_unknown', 0)}张",
+                "性能统计": (
+                    f"节点{performance_stats['nodes_searched']:,} "
+                    f"深度{performance_stats['search_depth']} "
+                    f"TT命中{performance_stats['tt_hit_rate']:.1f}% "
+                    f"剪枝{performance_stats['cutoff_rate']:.1f}%"
+                ),
+            },
+        )
+        console_ui.end_request("完成")
+
         # 准备返回结果
         result = {
             'card': card_display,
@@ -2307,14 +2256,16 @@ def ai_move():
             'recommendation': recommendation,
             'performance_stats': performance_stats  # 添加性能统计
         }
-        
+
         # 如果请求了搜索进度，添加到结果中
         if show_search_progress and search_progress_data:
             result['search_progress'] = search_progress_data
             result['search_summary'] = generate_search_summary(search_progress_data)
-        
+
         return jsonify(result)
     except Exception as e:
+        console_ui.end_request("出错")
+        console_ui.update_thinking(f"错误: {e}")
         return jsonify({'error': str(e)}), 500
 
 def format_move_for_display(move):

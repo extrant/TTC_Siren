@@ -43,6 +43,9 @@ from core.card import Card
 from core.game_state import GameState
 from core.player import Player
 
+# ── 终端可视化系统 ──
+from console_ui import ui as console_ui, detect_terminal, init_console_window
+
 # ═══════════════════════════════════════════════════════════════════
 # 常量
 # ═══════════════════════════════════════════════════════════════════
@@ -1667,8 +1670,15 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
 
     os.system('title TTC_Siren - Triple Triad AI Server')
+    init_console_window(120, 30)
+    caps = detect_terminal()
+
     os.system('cls' if os.name == 'nt' else 'clear')
-    print(render(0))
+    if caps["supports_truecolor"]:
+        print(render(0))
+    else:
+        print("TTC_Siren - Triple Triad AI Server")
+
     parser = argparse.ArgumentParser(description="统一 Triple Triad AI 服务")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址 (默认 127.0.0.1)")
     parser.add_argument("--port", type=int, default=5000, help="监听端口 (默认 5000)")
@@ -1679,15 +1689,26 @@ if __name__ == "__main__":
         print(json.dumps(self_test(), ensure_ascii=False, indent=2))
         sys.exit(0)
 
-    # 抑制 Flask 启动日志
+    # 抑制 Flask 启动日志（避免与固定区域的控制台面板互相刷屏）
     import logging
     log = logging.getLogger("werkzeug")
-    #log.setLevel(logging.ERROR)
+    log.setLevel(logging.ERROR)
 
+    terminal_kind = "Windows Terminal / ConPTY" if caps["is_windows_terminal"] else (
+        "现代 ANSI 终端" if caps["supports_truecolor"] else "传统终端 (降级渲染)"
+    )
     print(f" * 统一 Triple Triad AI 服务运行在 http://{args.host}:{args.port}")
     print(f"   求解器:     POST /ai_move")
     print(f"   NPC推荐:   POST /api/recommend")
     print(f"   选拔分析:   POST /api/draft/analyze")
     print(f"   胜率估算:   POST /api/winrate")
+    print(f"   终端环境:   {terminal_kind} (color_system={caps['color_system']})")
     print(f"   Press CTRL+C to quit")
-    app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
+
+    console_ui.start()
+    try:
+        app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        console_ui.stop()
