@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-import pandas as pd
+import csv_compat as pd
 from core.card import Card
 from core.player import Player
 from core.board import Board
@@ -64,7 +64,11 @@ def get_card_lookup():
         _card_lookup = {}
         for _, row in db.iterrows():
             key = (int(row['Top']), int(row['Right']), int(row['Bottom']), int(row['Left']))
-            _card_lookup[key] = int(row['序号'])
+            # 四边数值并不总能唯一确定卡牌（例如 12/369 都是 2,5,5,2）。
+            # 与插件侧 TriadCardDB.Find 的“首个匹配”语义保持一致，避免后端
+            # 把同一张明牌稳定识别成后出现的另一个 ID。
+            if key not in _card_lookup:
+                _card_lookup[key] = int(row['序号'])
     return _card_lookup
 
 def get_card_star_map():

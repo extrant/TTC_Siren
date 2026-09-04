@@ -4,7 +4,7 @@ from core.card import Card
 import copy
 import sys
 import os
-import pandas as pd
+import csv_compat as pd
 import random
 import math
 import time
