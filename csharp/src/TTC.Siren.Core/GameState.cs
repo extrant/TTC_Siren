@@ -61,6 +61,7 @@ public sealed class GameState
         public bool HasSnapshot;
         public ushort FlipMask;
         public ushort FlipFromNoneMask;
+        public ulong HashBefore; // Zobrist hash before the move: undo restores it instead of re-deriving it
     }
 
     // Card instance table (structure of arrays). Instance indices are stable for the life of the state.
@@ -79,6 +80,7 @@ public sealed class GameState
     private readonly byte[] _handCount = new byte[2];
     private int _current;
     private RuleSet _rules;
+    private ulong _hash; // incremental Zobrist hash (see ZobristKeys for what it covers)
 
     private readonly UndoRecord[] _undo = new UndoRecord[MaxUndoDepth];
     private readonly sbyte[] _snapshot = new sbyte[MaxUndoDepth * SnapLen];
@@ -99,6 +101,22 @@ public sealed class GameState
     // ------------------------------------------------------------------ read access
 
     public int CurrentPlayer => _current;
+
+    /// <summary>Incremental Zobrist hash of the position (see <see cref="ZobristKeys"/>); updated by make, restored by undo.</summary>
+    public ulong ZobristHash => _hash;
+
+    /// <summary>The Zobrist hash derived from scratch from the current fields. Used by tests to verify the incremental one.</summary>
+    public ulong ComputeZobristHash()
+    {
+        ulong h = _current == 1 ? ZobristKeys.Side : 0UL;
+        for (int cell = 0; cell < 9; cell++)
+        {
+            if (_cell[cell] >= 0) h ^= ZobristKeys.Cell(cell, _cell[cell]);
+        }
+        for (int inst = 0; inst < _instCount; inst++)
+            h ^= ZobristKeys.Owner(inst, _owner[inst]) ^ ZobristKeys.Mod(inst, _mod[inst]);
+        return h;
+    }
     public RuleSet Rules => _rules;
     public int UndoDepth => _undoCount;
     public ushort OccupiedMask => _occupied;
@@ -188,6 +206,7 @@ public sealed class GameState
             }
             g._handCount[p] = (byte)hand.Count;
         }
+        g._hash = g.ComputeZobristHash();
         return g;
     }
 
@@ -459,6 +478,7 @@ public sealed class GameState
             _flipMask |= bit;
             if (originalOwner == OwnerId.None) _flipFromNoneMask |= bit;
             _owner[ni] = mover;
+            _hash ^= ZobristKeys.Owner(ni, originalOwner) ^ ZobristKeys.Owner(ni, mover);
             if (cov is not null)
             {
                 if (chainOnly) cov.ComboFlip++;
@@ -481,6 +501,7 @@ public sealed class GameState
     /// <summary>Python <c>apply_type_modifier</c>: sets the modifier and refreshes the display edges.</summary>
     private void ApplyTypeModifier(int inst, int modifier)
     {
+        _hash ^= ZobristKeys.Mod(inst, _mod[inst]) ^ ZobristKeys.Mod(inst, modifier);
         _mod[inst] = (sbyte)modifier;
         for (int side = 0; side < 4; side++) _display[inst * 4 + side] = (byte)Effective(inst, side);
     }
@@ -558,7 +579,9 @@ public sealed class GameState
             for (int i = 0; i < _instCount; i++) _snapshot[sb + i] = _mod[i];
         }
 
+        rec.HashBefore = _hash;
         rec.PlacedOrigOwner = _owner[inst];
+        _hash ^= ZobristKeys.Owner(inst, _owner[inst]) ^ ZobristKeys.Owner(inst, p) ^ ZobristKeys.Cell(cell, inst) ^ ZobristKeys.Side;
         _owner[inst] = (byte)p; // player 0 = red, 1 = blue
         _cell[cell] = (sbyte)inst;
         _occupied |= (ushort)(1 << cell);
@@ -638,6 +661,7 @@ public sealed class GameState
             for (int i = 0; i < _instCount; i++) _mod[i] = _snapshot[sb + i];
         }
 
+        _hash = rec.HashBefore; // every hashed field was just restored, so this is the pre-move hash
         if (Coverage is { } c2) c2.Undos++;
         return true;
     }
