@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>TTC.Siren.Search</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TTC.Siren.Core\TTC.Siren.Core.csproj" />
+  </ItemGroup>
+
+</Project>
