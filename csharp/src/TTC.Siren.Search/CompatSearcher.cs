@@ -88,6 +88,14 @@ public sealed class CompatSearcher
     private bool _timed;
     private long _deadlineTimestamp;
 
+    /// <summary>
+    /// Phase 4 oracle switch. <c>true</c> (default) is Python's behaviour. <c>false</c> disables the transposition
+    /// table completely (no probe, no store; D-005/D-006 are then irrelevant): the search becomes plain stable-ordered
+    /// alpha-beta whose root score is the exact depth-limited minimax value, the reference the Fast mode is compared
+    /// against. Everything else (ordering, history, clock, statistics) is unchanged.
+    /// </summary>
+    public bool UseTranspositionTable { get; set; } = true;
+
     public SearchStats Stats { get; } = new();
     public HistoryTable History { get; }
     public Evaluator Evaluator => _eval;
@@ -106,7 +114,16 @@ public sealed class CompatSearcher
     /// A direct root call of Python <c>minimax(state, depth, -inf, +inf, True, current_player, ..., is_root=True, {})</c>
     /// with a fresh transposition table, fresh statistics and an empty history table.
     /// </summary>
-    public SearchResult RunFixedDepth(int depth, bool aggressive, SearchLimits limits)
+    public SearchResult RunFixedDepth(int depth, bool aggressive, SearchLimits limits) =>
+        RunFixedDepthAs(depth, true, _g.CurrentPlayer, aggressive, limits);
+
+    /// <summary>
+    /// The same direct call with an explicit node role: <paramref name="maximizing"/> and the AI perspective
+    /// <paramref name="aiPlayer"/> are passed instead of "side to move, maximising". Used (with the table off) to
+    /// compute the exact full-window value of each child of a root, i.e. the tie set of the root moves (Phase 4, Q-5).
+    /// <c>RunFixedDepthAs(d, true, state.CurrentPlayer, ...)</c> is exactly <see cref="RunFixedDepth"/>.
+    /// </summary>
+    public SearchResult RunFixedDepthAs(int depth, bool maximizing, int aiPlayer, bool aggressive, SearchLimits limits)
     {
         _tt.NewGeneration();
         Stats.Reset();
@@ -115,7 +132,7 @@ public sealed class CompatSearcher
         int rootUndo = _g.UndoDepth;
         try
         {
-            return Node(depth, double.NegativeInfinity, double.PositiveInfinity, true, _g.CurrentPlayer);
+            return Node(depth, double.NegativeInfinity, double.PositiveInfinity, maximizing, aiPlayer);
         }
         finally
         {
@@ -208,14 +225,19 @@ public sealed class CompatSearcher
         if (IsTimeUp()) return Leaf(aiPlayer);
         if (depth == 0 || g.IsGameOver) return Leaf(aiPlayer);
 
-        PythonStateKey.Compute(g, out ulong h1, out ulong h2);
-        if (_tt.TryGet(h1, h2, out var hit))
+        ulong h1 = 0, h2 = 0;
+        bool useTt = UseTranspositionTable;
+        if (useTt)
         {
-            Stats.TtHits++;
-            if (hit.Depth >= depth)
+            PythonStateKey.Compute(g, out h1, out h2);
+            if (_tt.TryGet(h1, h2, out var hit))
             {
-                Stats.TtCutoffs++;
-                return new SearchResult(hit.Score, hit.BestInstance, hit.BestCell);
+                Stats.TtHits++;
+                if (hit.Depth >= depth)
+                {
+                    Stats.TtCutoffs++;
+                    return new SearchResult(hit.Score, hit.BestInstance, hit.BestCell);
+                }
             }
         }
 
@@ -271,7 +293,7 @@ public sealed class CompatSearcher
         }
 
         // Written on every exit of the loop, including time-up and cutoffs, and always overwriting (D-006).
-        _tt.Store(h1, h2, depth, best, bestInst, bestCell);
+        if (useTt) _tt.Store(h1, h2, depth, best, bestInst, bestCell);
         return new SearchResult(best, bestInst, bestCell);
     }
 
