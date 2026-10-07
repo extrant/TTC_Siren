@@ -7,14 +7,14 @@ import copy
 class MoveRecord:
     """移动记录，用于undo操作"""
     def __init__(self, row: int, col: int, card: Card, player_idx: int, 
-                 flipped_cards: List[tuple] = None, type_modifiers: dict = None,
+                 flipped_cards: List[tuple] = None, type_modifiers: list = None,
                  card_original_owner: str = None):
         self.row = row
         self.col = col
         self.card = card  # 放置的卡牌
         self.player_idx = player_idx  # 执行移动的玩家索引
         self.flipped_cards = flipped_cards or []  # [(row, col, original_owner), ...]
-        self.type_modifiers = type_modifiers or {}  # {card_id: original_modifier, ...}
+        self.type_modifiers = type_modifiers or []  # [(card, original_modifier), ...]，按卡牌对象恢复
         self.card_original_owner = card_original_owner
 
 class GameState:
@@ -109,17 +109,19 @@ class GameState:
             return None
         
         # 记录原始类型修正值（用于undo）
-        original_type_modifiers = {}
+        original_type_modifiers = []
         if '同类强化' in self.rules or '同类弱化' in self.rules:
-            # 记录所有卡牌的当前type_modifier
+            # 记录所有卡牌的当前type_modifier。
+            # 按卡牌对象（身份）而不是按手牌下标记录：undo_move 会把打出的卡追加到手牌末尾，
+            # 手牌顺序随之改变，按下标恢复会把修正值写到错误的卡上（D-002，已修复）。
             for r in range(3):
                 for c in range(3):
                     board_card = self.board.get_card(r, c)
                     if board_card:
-                        original_type_modifiers[f"board_{r}_{c}"] = board_card.type_modifier
-            for i, player in enumerate(self.players):
-                for j, hand_card_item in enumerate(player.hand):
-                    original_type_modifiers[f"hand_{i}_{j}"] = hand_card_item.type_modifier
+                        original_type_modifiers.append((board_card, board_card.type_modifier))
+            for player in self.players:
+                for hand_card_item in player.hand:
+                    original_type_modifiers.append((hand_card_item, hand_card_item.type_modifier))
         
         card_original_owner = card.owner
 
@@ -183,20 +185,9 @@ class GameState:
         
         # 恢复类型修正值
         if move_record.type_modifiers:
-            # 恢复棋盘卡牌的type_modifier
-            for key, original_modifier in move_record.type_modifiers.items():
-                if key.startswith("board_"):
-                    parts = key.split("_")
-                    r, c = int(parts[1]), int(parts[2])
-                    board_card = self.board.get_card(r, c)
-                    if board_card:
-                        board_card.type_modifier = original_modifier
-                elif key.startswith("hand_"):
-                    parts = key.split("_")
-                    player_idx, hand_idx = int(parts[1]), int(parts[2])
-                    if (player_idx < len(self.players) and 
-                        hand_idx < len(self.players[player_idx].hand)):
-                        self.players[player_idx].hand[hand_idx].type_modifier = original_modifier
+            # 按卡牌身份恢复棋盘和手牌中每一张卡的type_modifier
+            for tracked_card, original_modifier in move_record.type_modifiers:
+                tracked_card.type_modifier = original_modifier
         
         return True
 
