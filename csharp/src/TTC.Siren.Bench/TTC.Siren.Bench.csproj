@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>TTC.Siren.Bench</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TTC.Siren.Core\TTC.Siren.Core.csproj" />
+    <ProjectReference Include="..\TTC.Siren.Search\TTC.Siren.Search.csproj" />
+  </ItemGroup>
+
+</Project>
