@@ -285,19 +285,20 @@ public sealed class Evaluator
         else if (cell == 4) score += 10.0;
 
         // 4. captures (compare_values with the rule set; reversal and fallen ace included)
+        // Neighbours come from the board's precomputed table in Python's order (up, down, left, right).
         byte myOwner = g.InstanceOwner(inst);
         RuleSet rules = g.Rules;
-        for (int k = 0; k < 4; k++)
+        int neighbours = GameState.NeighborCount(cell);
+        for (int k = 0; k < neighbours; k++)
         {
-            int nr = row + Dr[k], nc = col + Dc[k];
-            if (nr < 0 || nr > 2 || nc < 0 || nc > 2) continue;
-            int opp = g.BoardInstance(nr * 3 + nc);
+            int opp = g.BoardInstance(GameState.NeighborCell(cell, k));
             if (opp < 0 || g.InstanceOwner(opp) == myOwner) continue;
-            int result = GameState.CompareValues(g.InstanceEffective(inst, MySide[k]), g.InstanceEffective(opp, OppSide[k]), rules);
+            int mySide = GameState.NeighborMySide(cell, k), oppSide = GameState.NeighborOppSide(cell, k);
+            int result = GameState.CompareValues(g.InstanceEffective(inst, mySide), g.InstanceEffective(opp, oppSide), rules);
             if (result != 1) continue;
 
-            int myValue = g.InstanceDisplay(inst, MySide[k]);
-            int oppValue = g.InstanceDisplay(opp, OppSide[k]);
+            int myValue = g.InstanceDisplay(inst, mySide);
+            int oppValue = g.InstanceDisplay(opp, oppSide);
             int diff = myValue > oppValue ? myValue - oppValue : oppValue - myValue;
             double captureScore = 30.0 + diff * 5.0;
             if (star != 0)
@@ -309,11 +310,9 @@ public sealed class Evaluator
         }
 
         // 5. adjacent own cards
-        for (int k = 0; k < 4; k++)
+        for (int k = 0; k < neighbours; k++)
         {
-            int nr = row + Dr[k], nc = col + Dc[k];
-            if (nr < 0 || nr > 2 || nc < 0 || nc > 2) continue;
-            int adj = g.BoardInstance(nr * 3 + nc);
+            int adj = g.BoardInstance(GameState.NeighborCell(cell, k));
             if (adj >= 0 && g.InstanceOwner(adj) == myOwner) score += 10.0;
         }
 

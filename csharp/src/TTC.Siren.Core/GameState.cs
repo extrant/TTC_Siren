@@ -27,6 +27,22 @@ public sealed class GameState
     private static readonly byte[] NbMySide = new byte[9 * 4];
     private static readonly byte[] NbOppSide = new byte[9 * 4];
 
+    /// <summary>Number of on-board neighbours of <paramref name="cell"/> (Python's direction order: up, down, left, right).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int NeighborCount(int cell) => NbCount[cell];
+
+    /// <summary>The cell of neighbour <paramref name="k"/> (0..<see cref="NeighborCount"/>-1) of <paramref name="cell"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int NeighborCell(int cell, int k) => NbCell[cell * 4 + k];
+
+    /// <summary>The side of the card on <paramref name="cell"/> that touches neighbour <paramref name="k"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int NeighborMySide(int cell, int k) => NbMySide[cell * 4 + k];
+
+    /// <summary>The side of neighbour <paramref name="k"/> that touches the card on <paramref name="cell"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int NeighborOppSide(int cell, int k) => NbOppSide[cell * 4 + k];
+
     static GameState()
     {
         (int Dr, int Dc, int My, int Opp)[] dirs =
