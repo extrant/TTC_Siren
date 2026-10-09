@@ -74,41 +74,82 @@ public sealed class Evaluator
 
     // ---------------------------------------------------------------- placement edge score
 
-    /// <summary>
-    /// Python <c>_calculate_placement_edge_score</c>. All terms are multiples of 0.5, so the sum is exact in any order.
-    /// </summary>
-    public double PlacementEdgeScore(int inst, int row, int col)
+    // Per-edge terms of _calculate_placement_edge_score for the effective value 1..10, exposed (row > 0 for up, col < 2 for
+    // right, row < 2 for down, col > 0 for left) or hidden. They are exactly the terms Python adds or subtracts; "score -= x"
+    // is "score += -x" in IEEE arithmetic. Lookups replace the compare chains, whose branches are hard to predict.
+    private static readonly double[] ExposedTerm = BuildTerms(true);
+    private static readonly double[] HiddenTerm = BuildTerms(false);
+    private static readonly byte[] ExposedMask = BuildExposedMasks(); // bit per Side index, per cell
+    private static readonly byte[] ExposedCount = BuildExposedCounts();
+
+    private static double[] BuildTerms(bool exposed)
     {
-        double score = 0.0;
-        int exposedCount = 0;
-        int ev0 = 0, ev1 = 0;
-        for (int side = 0; side < 4; side++)
+        var t = new double[11];
+        for (int value = 1; value <= 10; value++)
         {
-            bool exposed = side switch
-            {
-                Side.Up => row > 0,
-                Side.Right => col < 2,
-                Side.Down => row < 2,
-                _ => col > 0,
-            };
-            int value = _g.InstanceEffective(inst, side);
+            double term = 0.0;
             if (exposed)
             {
-                if (value >= 8) score += (value - 7) * 3.0;
-                else if (value <= 3) score -= (4 - value) * 4.0;
-                else if (value <= 5) score -= (6 - value) * 1.0;
-                if (exposedCount == 0) ev0 = value; else ev1 = value;
-                exposedCount++;
+                if (value >= 8) term = (value - 7) * 3.0;
+                else if (value <= 3) term = -((4 - value) * 4.0);
+                else if (value <= 5) term = -((6 - value) * 1.0);
             }
             else
             {
-                if (value <= 3) score += (4 - value) * 2.5;
-                else if (value >= 8) score -= (value - 7) * 2.0;
+                if (value <= 3) term = (4 - value) * 2.5;
+                else if (value >= 8) term = -((value - 7) * 2.0);
             }
+            t[value] = term;
         }
+        return t;
+    }
 
-        if (exposedCount == 2)
+    private static byte[] BuildExposedCounts()
+    {
+        var c = new byte[9];
+        for (int cell = 0; cell < 9; cell++) c[cell] = (byte)System.Numerics.BitOperations.PopCount(ExposedMask[cell]);
+        return c;
+    }
+
+    private static byte[] BuildExposedMasks()
+    {
+        var m = new byte[9];
+        for (int cell = 0; cell < 9; cell++)
         {
+            int row = cell / 3, col = cell % 3;
+            int mask = 0;
+            if (row > 0) mask |= 1 << Side.Up;
+            if (col < 2) mask |= 1 << Side.Right;
+            if (row < 2) mask |= 1 << Side.Down;
+            if (col > 0) mask |= 1 << Side.Left;
+            m[cell] = (byte)mask;
+        }
+        return m;
+    }
+
+    /// <summary>
+    /// Python <c>_calculate_placement_edge_score</c>. All terms are multiples of 0.5 and small, so every partial sum is
+    /// exact and the result does not depend on the order of the additions (bit-identical to Python).
+    /// </summary>
+    public double PlacementEdgeScore(int inst, int row, int col)
+    {
+        int mask = ExposedMask[row * 3 + col];
+        double[] exposedTerm = ExposedTerm, hiddenTerm = HiddenTerm; // one static load each (cheap in unoptimised code too)
+        int up = _g.InstanceEffective(inst, Side.Up), right = _g.InstanceEffective(inst, Side.Right);
+        int down = _g.InstanceEffective(inst, Side.Down), left = _g.InstanceEffective(inst, Side.Left);
+        double score = ((mask & 1 << Side.Up) != 0 ? exposedTerm[up] : hiddenTerm[up])
+                     + ((mask & 1 << Side.Right) != 0 ? exposedTerm[right] : hiddenTerm[right])
+                     + ((mask & 1 << Side.Down) != 0 ? exposedTerm[down] : hiddenTerm[down])
+                     + ((mask & 1 << Side.Left) != 0 ? exposedTerm[left] : hiddenTerm[left]);
+
+        // two exposed edges (corner cells): the pair bonus / penalty looks at those two values
+        if (ExposedCount[row * 3 + col] == 2)
+        {
+            int ev0 = 0, ev1 = 0, n = 0;
+            if ((mask & 1 << Side.Up) != 0) { ev0 = up; n++; }
+            if ((mask & 1 << Side.Right) != 0) { if (n == 0) ev0 = right; else ev1 = right; n++; }
+            if ((mask & 1 << Side.Down) != 0) { if (n == 0) ev0 = down; else ev1 = down; n++; }
+            if ((mask & 1 << Side.Left) != 0) { if (n == 0) ev0 = left; else ev1 = left; }
             if (ev0 >= 8 && ev1 >= 8) score += 8.0;
             if (ev0 <= 3 || ev1 <= 3) score -= 4.0;
         }
