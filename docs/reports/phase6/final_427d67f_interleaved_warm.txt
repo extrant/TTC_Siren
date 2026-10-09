@@ -1,0 +1,24 @@
+# interleaved Python (CPython 3.11.4) / C# [warm], rounds=3, python runs per round=1, C# runs per round=5, CPU set: 0xFFF for both sides
+# CPU classes: class 1 = 0xFFF, class 0 = 0xFF000  (hybrid CPU: higher class = P-cores)
+round 1  fixed    Python 2.7230 s   C# 0.01745 s (min 0.01685 max 0.01870)   ratio 156.0x   nodes 43003   [affinity 0xFFF]
+round 1  exact    end5_same_plus 0.0035/0.00001 s = 245x   mid4_rev_ace 0.0550/0.00019 s = 295x   mid3_ascension 10.5972/0.04026 s = 263x   [affinity 0xFFF]
+round 1  endgame  Python 9.4097 s   C# 0.03692 s (min 0.03518 max 0.04488)   ratio 254.8x   72/72 selections identical   [affinity 0xFFF]
+round 2  fixed    Python 2.7700 s   C# 0.01671 s (min 0.01595 max 0.01844)   ratio 165.7x   nodes 43003   [affinity 0xFFF]
+round 2  exact    end5_same_plus 0.0035/0.00002 s = 196x   mid4_rev_ace 0.0574/0.00027 s = 209x   mid3_ascension 10.2744/0.04116 s = 250x   [affinity 0xFFF]
+round 2  endgame  Python 9.0627 s   C# 0.03781 s (min 0.03607 max 0.04493)   ratio 239.7x   72/72 selections identical   [affinity 0xFFF]
+round 3  fixed    Python 2.7587 s   C# 0.01699 s (min 0.01619 max 0.01792)   ratio 162.4x   nodes 43003   [affinity 0xFFF]
+round 3  exact    end5_same_plus 0.0038/0.00001 s = 301x   mid4_rev_ace 0.0547/0.00019 s = 285x   mid3_ascension 10.1963/0.03999 s = 255x   [affinity 0xFFF]
+round 3  endgame  Python 9.0802 s   C# 0.03849 s (min 0.03691 max 0.04687)   ratio 235.9x   72/72 selections identical   [affinity 0xFFF]
+
+# summary [affinity 0xFFF] (child processes reported affinity: 0xFFF)
+suite      Python s  min / median / max       C# s  min / median / max           ratio  min / median / max
+fixed          2.7230 /    2.7587 /    2.7700     0.01671 /   0.01699 /   0.01745    156.0 / 162.4 / 165.7 x
+exact         10.2548 /   10.3353 /   10.6558     0.04019 /   0.04046 /   0.04145    249.4 / 255.2 / 263.4 x
+endgame        9.0627 /    9.0802 /    9.4097     0.03692 /   0.03781 /   0.03849    235.9 / 239.7 / 254.8 x
+
+exact solver per position (Python s / C# s per round; ratio)
+  end5_same_plus   Python 0.00351/0.00353/0.00380   C# 0.000013/0.000014/0.000018   ratio 196/245/301 x   make_move Python 217, C# 217 (work ratio 1.000)
+  mid4_rev_ace     Python 0.05468/0.05501/0.05737   C# 0.000186/0.000192/0.000274   ratio 209/285/295 x   make_move Python 4707, C# 4707 (work ratio 1.000)
+  mid3_ascension   Python 10.19631/10.27444/10.59725   C# 0.039986/0.040259/0.041156   ratio 250/255/263 x   make_move Python 297935, C# 241264 (work ratio 1.235)
+
+ratio = Python / C# per round, CPU set: 0xFFF (both sides). All ratios are versus CPython 3.11.4; PyPy was not measured.

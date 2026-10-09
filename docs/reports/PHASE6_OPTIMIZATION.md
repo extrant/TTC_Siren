@@ -96,13 +96,19 @@ Cold (`--cold`):
 
 Cold, **alternating builds** (`tools/bench/ab_interleaved.py`, original / final, `docs/reports/phase6/ab_interleaved_cold_*.txt`): ReferenceCompat 22 items median 0.04450 → 0.04116 s (−7.5%, 25 samples); Fast 1.4006 → 1.0087 s (−28%, 7); exact `mid3_ascension` 0.0640 → 0.0421 s (−34%, 7); robust pipeline 0.08187 → 0.06325 s (−23%, 15).
 
-**Python vs C#, interleaved, 3 rounds, `0xFFF` on both sides** (CPython 3.11.4; `final_interleaved_*.txt`), min / median / max, against the baseline of §1:
+**Python vs C#, interleaved, 3 rounds, `0xFFF` on both sides** (CPython 3.11.4), min / median / max. The "final" columns are a fresh `run_interleaved.py --rounds 3 --affinity auto [--cold]`
+run on the **final commit `427d67f`** (`final_427d67f_interleaved_*.txt`; every child reported `0xFFF`, 72/72 selections identical in every round, node counts and exact values asserted by the runner).
+An earlier run taken before C3 was reverted and re-applied is superseded and is not quoted.
 
-| suite | warm: baseline | warm: final | cold: baseline | cold: final |
+| suite | warm: baseline | warm: final `427d67f` | cold: baseline | cold: final `427d67f` |
 |---|---|---|---|---|
-| fixed-depth search (same nodes) | 114.3 / 117.7 / 118.9× | **156.1 / 159.9 / 162.1×** | 61.8 / 68.9 / 80.2× | 64.9 / 67.6 / 71.8× |
-| exact solver (3 positions) | 166.7 / 170.5 / 170.9× | **259.5 / 264.4 / 269.1×** | 159.8 / 164.5 / 169.7× | 252.1 / 256.9 / 259.0× |
-| robust pipeline (72 positions) | 180.9 / 181.9 / 186.3× | **231.5 / 245.9 / 247.9×** | 114.9 / 118.8 / 120.6× | 127.6 / 147.3 / 147.4× |
+| fixed-depth search (same nodes) | 114.3 / 117.7 / 118.9× | **156.0 / 162.4 / 165.7×** | 61.8 / 68.9 / 80.2× | 62.9 / 63.4 / 66.6× |
+| exact solver (3 positions) | 166.7 / 170.5 / 170.9× | **249.4 / 255.2 / 263.4×** | 159.8 / 164.5 / 169.7× | 241.8 / 256.6 / 259.1× |
+| robust pipeline (72 positions) | 180.9 / 181.9 / 186.3× | **235.9 / 239.7 / 254.8×** | 114.9 / 118.8 / 120.6× | 140.9 / 142.7 / 150.3× |
+
+The cold fixed-suite ratio does not improve in this protocol: the 22-item cold suite is 40 ms of mostly tier-0 code, its C# total is bimodal (62.9–80.2× over the baseline runs, 62.9–66.6× now; the
+ranges overlap), and the like-for-like alternating-build measurement of §5 shows the C# time itself 7.5% lower. Python's own timings drift a few percent between sessions (fixed 2.80 → 2.72 s here), which is
+why the ratios of one session are only comparable with each other.
 
 Of the exact-solver ratio, 1.235× is still the algorithmic memo-key gain (297,935 vs 241,264 `make_move`), and the robust pipeline still does 1.074× less work. The Python timings
 of these runs are the same as in the baseline (exact `mid3_ascension` 10.8–11.4 s), so the change is on the C# side only.
