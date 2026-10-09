@@ -144,6 +144,13 @@ public static class EndgameRobust
 
     private const double SafetyMargin = 0.75;
 
+    // One memo table per thread, reused by every Select call: allocating and zeroing a 32K-entry table (~768 KiB) per call was
+    // visible in the robust pipeline (review L5-2). Every scenario starts its own generation (ExactEndgameSolver.Bind), which
+    // empties the table in O(1) and binds it to that scenario's state, side and evaluation mode.
+    [ThreadStatic] private static FastTranspositionTable? t_memo;
+
+    private static FastTranspositionTable SharedMemo() => t_memo ??= ExactEndgameSolver.CreateMemo();
+
     /// <summary>
     /// Python <c>select_endgame_robust_move(base_state, scenario_states, ai_player_idx, aggressive)</c> including the
     /// per-move <c>_evaluate_endgame_move_robustly</c>. The scenarios are never modified (each is cloned first), nor is
@@ -178,7 +185,7 @@ public static class EndgameRobust
         }
         var safetyVotes = new int[n];
         var mapped = new int[n];
-        if (useExact) memo ??= ExactEndgameSolver.CreateMemo();
+        if (useExact) memo ??= SharedMemo(); // a generation per scenario state is started by Bind, so reuse across calls is safe
         long exactNodes = 0, exactMakes = 0;
 
         foreach (var scenario in scenarios)
