@@ -122,6 +122,8 @@ of these runs are the same as in the baseline (exact `mid3_ascension` 10.8–11.
   candidate's by 3%. A regression above 3% is therefore **not repeatable** under the protocol, and the keep rule ("repeatable ... at least 3% on the targeted workload and no regression above 3% elsewhere")
   is met: warm −20%, Fast cold −18..−28%, cold 22-item suite within noise. Supporting evidence, not the basis of the decision: alternating the builds sample by sample (25 samples each,
   `tools/bench/ab_interleaved.py`) gives original 0.0431 s, with C3 0.0423 s, without C3 0.0500 s (+16%), i.e. removing C3 is what makes the cold suite slower. C3 was re-applied as `290b15e`
+  Reverting C3 does not restore the cold figure under the same protocol either: the tree without C3 (`17c07c7`, 11 process runs, `run_cs_pinned.py --cold`, original build first) measured the cold
+  22-item suite at 0.0500 s against 0.0405 s for the original (+23.5%), so the cold number of this micro-suite is not attributable to C3.
   (code identical to `6b61630`; both commits stay in the local history). The block-order figures of §4 are kept as measured and labelled.
 - Cold figures are bimodal (JIT timing); read them as ranges and compare builds only with alternating samples (`ab_interleaved.py`). Block-order cold comparisons in this report (e.g. robust pipeline −1% in the first cold table) disagree with the alternating ones (−23%) for that reason.
 - Short items (µs) are timer-limited; `exact end5_same_plus` / `mid4_rev_ace` changes of ±10% are noise.
