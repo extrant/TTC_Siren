@@ -5,7 +5,7 @@
 > 任何 Phase 完成后必须更新本文件。
 >
 > **新会话快速上手：先读 `CLAUDE.md`，再读本文件 §12「会话交接」（当前状态、如何构建/测试、用户已做的决定、未解决问题、下一步），然后按需读 §0 与 §7。**
-> 当前一句话状态：Phase 1–4 完成（Phase 4 于 2026-10-07 完成，Q-5 = 选项 (b)，验收见 §7 Phase 4）；Phase 5 **未开始**；Phase 4 独立审查门禁为 **`PASS_TO_PHASE_5`**（H4-1 已 RESOLVED，复审见 `docs/reviews/OPUS_PHASE4_REVIEW.md` §13），等待用户明确授权；工作在分支 `csharp-solver-migration`（Phase 1–3 已推送；Phase 4 的改动**尚未提交、未推送**；**没有**对 `main` 的 PR——PR #1 已按用户要求关闭）。
+> 当前一句话状态：Phase 1–5 完成（Phase 5 于 2026-10-08 完成，验收见 §7 Phase 5；M4-1/M4-2 已先行解决）；Phase 6 **未开始**，等待用户明确授权；工作在分支 `csharp-solver-migration`（Phase 1–4 已推送，HEAD `710a70e`；**Phase 5 的改动尚未提交、未推送**，按 CLAUDE.md §8 没有用户要求不提交；**没有**对 `main` 的 PR——PR #1 已按用户要求关闭）。
 
 ---
 
@@ -17,8 +17,8 @@
 | 2 | Card / Move / RuleSet / GameState / MakeMove / UndoMove + 规则 parity 工具 | **DONE**（2026-10-07，验收见 §7 Phase 2） |
 | 3 | Evaluator / MoveOrdering / History / Minimax / AlphaBeta / ID（ReferenceCompat，节点级 parity） | **DONE**（2026-10-07，验收见 §7 Phase 3） |
 | 4 | Zobrist / 带 bound 的 TranspositionTable / Fast 搜索模式 | **DONE**（2026-10-07，Q-5 = 选项 (b)，验收见 §7 Phase 4） |
-| 5 | 精确残局 + 信息集 robust 残局 + Python-vs-C# 全量 benchmark | NOT STARTED — Phase 4 审查门禁 **`PASS_TO_PHASE_5`**（复审 2026-10-07，`docs/reviews/OPUS_PHASE4_REVIEW.md` §13；技术上可以开始，仍需用户明确授权） |
-| 6 | Profiler 驱动优化（单线程）→ 可选 root parallelism | NOT STARTED |
+| 5 | 精确残局 + 信息集 robust 残局 + Python-vs-C# 全量 benchmark | **DONE**（2026-10-08，验收见 §7 Phase 5；先行解决了 M4-1/M4-2；benchmark 报告 `docs/reports/PHASE5_BENCHMARK.md`） |
+| 6 | Profiler 驱动优化（单线程）→ 可选 root parallelism | NOT STARTED — Phase 5 benchmark 独立审查结论 **`BENCHMARK_VALID_WITH_CAVEATS`**（`docs/reviews/OPUS_PHASE5_BENCHMARK_REVIEW.md`：没有正确性回归；49.7× 是冷 JIT 数字，热态约 110×；精确求解的 263× 不可复现，约 165×）。建议 Phase 6 之前先执行 `.claude/sonnet_review_fix_goal.md`（只修 benchmark 工具与报告），否则 §6 的 Baseline→Compare 不可靠。**整改复审（2026-10-08，审查文档 §12）**：B-1 到 B-5 全部 RESOLVED，结论仍为 `BENCHMARK_VALID_WITH_CAVEATS`，更正后的数字在固定到 P 核的复测中得到确认；新发现 **A-7**（混合架构 CPU 的 P/E 核调度不受控，未固定亲和性时比值可偏高约 1.6–1.7×，C# 自身在 E 核上慢约 1.45×），Phase 6 之前需先执行新的 `.claude/sonnet_review_fix_goal.md`（只含 A-7）。**A-7 复审（2026-10-08，审查文档 §13）**：A-7 RESOLVED（`tools/bench/pin.py` + `run_interleaved.py --affinity`，两边固定在同一 P 核集，独立复测一致），B-1 到 B-5 无回归，结论 `BENCHMARK_VALID_WITH_CAVEATS`；可信范围（对 CPython 3.11.4、两边都在 P 核）：Python 语义搜索 warm 113–118×、cold ≈52–91×（双峰）；robust 流水线 warm 169–180×、cold 109–123×；精确求解 159–176×。**从 benchmark 角度可以开始 Phase 6**（仍需用户明确授权；Phase 6 的所有 Baseline→Compare 必须固定亲和性并记录掩码）。**用户已授权 Phase 6（2026-10-09）**：任务 `.claude/phase6_goal.md`（先提交并推送 Phase 5、再做 Q-2/D-004 双边修复，然后才是 Phase 6 的性能工作）；进行中 → 完成后等待独立审查 |
 | 7 | 集成策略：Python 服务调用 C# 引擎（桥接 + 回退） | NOT STARTED |
 | 8 | 全量服务移植（请求解析、未知牌采样、MC、分析文案、app.py 子系统、HTTP） | NOT STARTED |
 | 9 | 可选：CP-SAT 隐藏牌组合 / deck optimization / scenario generation | NOT STARTED |
@@ -32,6 +32,7 @@
 **审查门禁（Phase 2+3 独立审查，2026-10-07）**：结果 **`BLOCK_PHASE_4`**。报告：`docs/reviews/OPUS_PHASE3_REVIEW.md`。阻塞项为 3 个 HIGH：H-1 搜索异常时 GameState 未恢复；H-2 ReferenceCompat TT 在服务端等价配置下溢出；H-3 `Move` 以手牌槽位为身份。规则、评估、搜索与 Python 的 parity 已被独立复核（新种子重新生成全部 golden，外加对抗性用例，0 不一致）。修复任务：`.claude/sonnet_review_fix_goal.md`。修复完成并经复审改为 PASS 之前，**不得开始 Phase 4**（即使 `.claude/phase_goal.md` 按 §0 选中了 Phase 4）。Phase 4 开始前仍需用户决定 Q-5。
 **整改进展（2026-10-07）**：H-1、H-2、H-3 的整改已完成，**等待复审**（记录见 §7 Phase 3 的 "Review remediation (H-1/H-2/H-3)"；测量见 §10）。门禁状态 **仍为 `BLOCK_PHASE_4`**，由复审者而不是整改者改为 PASS；Phase 4 仍为 NOT STARTED。
 **复审结果（2026-10-07，`docs/reviews/OPUS_PHASE3_REVIEW.md` §15）**：门禁改为 **`PASS_TO_PHASE_4`**。H-1、H-2、H-3 均经独立验证为 **RESOLVED**，没有引入回归：43/43 测试通过；在原 golden 与新种子 golden 上 parity 计数完全不变；对抗性用例 0 不一致；"过期走法" fuzz 115,955 次 0 错误；中途抛异常（含调用方已有走法、ID 第 2 层以后抛出）时状态都能恢复；服务端等价调用 4 个局面全部完成，TT 峰值 512 MiB。M-1 到 M-3、L-1 到 L-12、O-1 到 O-6 仍未处理，均不阻塞（建议在 Phase 4 依赖新 golden 之前处理 M-1 到 M-3）。Phase 4 仍需用户明确授权；Q-5 的建议见审查报告 §15.6（选项 b：只允许在分数完全相等的走法之间不同，并逐条验证、报告）。
+**Phase 5（2026-10-08）**：用户授权 Phase 5；按用户要求先解决 Phase 4 审查的 M4-1（哈希充分性的独立测试）与 M4-2（golden 绑定到 Python 源码），再做 Phase 5。Phase 5 **完成**（见 §7 Phase 5）：精确残局、信息集 robust 残局、确定性的场景构造与覆盖逻辑与 Python 位级/逐条一致，benchmark 报告已产出。Phase 5 的改动没有经过独立审查；Phase 6 未开始。
 
 分析基线：分支 `csharp-solver-migration`，commit `eb60a02`（也是 `main` 的当前 HEAD）。Phase 1 未修改任何 Python 代码，只新增了 `CLAUDE.md` 和本文件。
 Phase 2 首次交付时没有修改任何已跟踪文件；**之后经用户批准（Q-1）修改了唯一一个已跟踪的 Python 文件 `core/game_state.py`（D-002 修复，+13/−22）并新增 `tests/test_undo_type_modifiers.py`**。Phase 1–3 的全部产物现已提交为 5 个提交并推送到 `origin/csharp-solver-migration`（见 §12.1）。
@@ -329,7 +330,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | D-001 | undo 把卡 `append` 到手牌末尾 → make+undo 后手牌顺序改变（实测 `[56,64,27,46,7]` → 打出 64 再撤销 → `[56,27,46,7,64]`） | 走法生成顺序 → 稳定排序中并列走法的先后 → best move 选择 / cutoff / 节点数 / history | C# 复现（有序手牌 + 移除下标 + 追加） | OPEN-EMULATE |
 | D-002 | （**已修复**）原行为：同类规则下，undo 按 **快照时的手牌下标** 恢复 `type_modifier`，但手牌已重排 → 修正值写到错误的卡上（Phase 1 实测：拂晓卡 46 从 +1 变 0，帝国卡 31 从 0 变 +1）。无类型卡也可能被写入非零修正且永远不会被重算。**修复**：make 时按卡牌对象（C# 按卡实例）保存 `type_modifier`，undo 时按身份写回；D-001（undo 追加到手牌末尾）和 D-003（显示边不恢复）**不变**。回归测试：Python `tests/test_undo_type_modifiers.py`（3 个，旧代码上全部失败）、C# `D002_fixed_undo_restores_modifiers_by_card_identity` + 全量 differential（golden generator `py_rules_trace/2`） | 修复前：改变规则结算结果；修复后：同类规则下搜索结果不再依赖访问顺序 | 两边同时修复（用户在 Phase 2 之后批准 Q-1，2026-10-07） | **FIXED-BOTH**
 | D-003 | 显示值 `.up/.right/.down/.left` 只在 `apply_type_modifier` 中更新，undo 不恢复；全 0 卡的显示值为 0，而有效值为 1 | `evaluate_move` 的吃子差值、星级特例，以及 `_score_unknown_candidate` 读取的是陈旧值 → 影响排序 | C# 为每个卡实例保存 4 字节 DisplayEdges 并完全复现（开销很小） | OPEN-EMULATE |
-| D-004 | 同一手牌里有重复 `card_id`（例如两个 None 占位牌、四边相同的两张牌被识别成同一 id、预测牌重复）时，`make_move` 移除的是第一张同 id 的卡，放到棋盘上的却是传入的那张 → undo 后出现重复引用、原卡丢失（实测） | 状态损坏 | C# 按手牌槽位身份处理；遇到重复 id 输入时报告并在 parity 中排除；是否在 Python 侧修复由用户决定 | **DECISION**（Q-2） |
+| D-004 | 同一手牌里有重复 `card_id`（例如两个 None 占位牌、四边相同的两张牌被识别成同一 id、预测牌重复）时，`make_move` 移除的是第一张同 id 的卡，放到棋盘上的却是传入的那张 → undo 后出现重复引用、原卡丢失（实测） | 状态损坏 | C# 按手牌槽位身份处理；遇到重复 id 输入时报告并在 parity 中排除；是否在 Python 侧修复由用户决定 | **DECISION**（Q-2）→ **用户决定（2026-10-09）：Python 与 C# 都修复**（Python `make_move` 先按对象身份找手牌、找不到再按 card_id；C# 接受重复 id；见 `.claude/phase6_goal.md` 步骤 B；完成并复审后改为 FIXED-BOTH） |
 | D-005 | TT key 中手牌 id 无分隔符拼接：`[1,23]` 与 `[12,3]` 的 key 相同（实测碰撞） | 罕见的错误 TT 命中 | ReferenceCompat 模式复现；**Fast 模式已改用 Zobrist（Phase 4，无此问题）** | OPEN-EMULATE（compat；Fast 不继承） |
 | D-006 | TT 不存 bound 类型；cutoff/超时后的部分结果也按精确值存储，命中条件只看深度 | 理论上不正确。§3.7 的 4 个样本中未观察到影响；**Phase 4 在 4,507 次固定深度运行中实测：3 次（0.07%）Python（TT 开）的根分数 ≠ 精确 minimax 值，且 Python 的走法不在精确并列集合内**（`i=186 d5`、`i=383 d5 激进`、`i=397 d4`，见 §7 Phase 4 的 Q-5 报告；ReferenceCompat 与 Python 一致，所以这三次是 TT 语义造成的，D-005 碰撞与 D-006 无 bound 在此未分开归因） | ReferenceCompat 复现；**Fast 模式使用 exact/lower/upper，只在同深度复用，不存被中断节点（Phase 4 已实现并验证）** | OPEN-EMULATE（compat；Fast 不继承） |
 | D-007 | 终局（棋盘满）仍用启发式 `evaluate_state`，没有胜负大分 | 搜索可能偏好"启发式分高但输掉"的线 | 不改，复现 | OPEN-EMULATE |
@@ -340,6 +341,10 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | D-012 | 数据库 id 474/475 为全 0 空行，会进入候选池（有效值视为 1，显示值为 0） | 未知牌候选质量 | 复现；是否过滤由用户决定 | OPEN |
 | D-013 | 连携只有一层（连携翻得的卡不再继续连携），与常见的游戏实现可能不同 | 规则语义 | Python 为准，复现；若要改动需用户确认 | OPEN-EMULATE |
 | D-014 | ID 在深度超过剩余空格后仍重复搜索；"预测下一层耗时" 的代码从不生效 | 只浪费时间，固定深度结果不受影响 | ReferenceCompat 复现；**Fast 模式已在整棵博弈树搜完（depth ≥ 空格数）或根方无合法走法后停止（Phase 4；每一层的分数与精确值位级相等，已验证）** | OPEN-EMULATE（compat；Fast 已处理） |
+| D-015 | `ai_move` 里的 robust 选择对 **走子方手牌顺序** 敏感（并列时稳定排序取先出现者），而 `base_state` 的手牌顺序是标准 minimax 搜索 **之后** 的顺序（`Player.hand` 与 `opp_hand` 是同一个列表，搜索的 `undo_move` 把牌追加到末尾，D-001）。实测：反转走子方手牌顺序，选中的走法在 532 次调用中有 10 次（≈1.9%，普通与激进模式各 10 次）改变 | Phase 7 想与 Python 的最终走法一致，必须复现搜索后的手牌顺序 | Phase 5 的 parity 以 Python 导出的状态（含手牌顺序）为输入；Phase 7：用 ReferenceCompat 做标准搜索并把搜索后的状态交给 robust 选择，或规定规范手牌顺序（需用户决定） | OPEN-EMULATE（Phase 7 处理）→ **用户决定（2026-10-09）：Phase 7 的标准搜索用 Fast，robust 选择前把手牌恢复为请求的原始顺序（规范顺序）**；因此最终走法只在完全同分时可能与 Python 不同，端到端比较按 Q-5 (b) 比较分数与并列集合（Phase 7 实施） |
+| D-016 | `_evaluate_endgame_move_robustly` 的"非精确"分支（一步回应 + 角落提前返回）在生产中不可达：进入 robust 模式要求占用 ≥ 5，`use_exact_solver` 与 corner 风险读同一块棋盘（占用 ≥ 5 才非零），所以"非精确且 corner_risk ≥ 5"永远为假 | 无（死代码） | C# 忠实复现并以 PY-QUIRK 标注；golden 覆盖非精确路径并断言该路径 corner 风险恒为 0 | OPEN-EMULATE |
+| D-017 | `_copy_state_with_unknown_assignment` 的替换牌 `type_modifier` = 0 且不重算同类修正，含同类规则时场景里的未知牌没有强化/弱化，直到有类型的牌被打出触发重算 | 场景内的精确值 | 复现；golden 逐条验证 | OPEN-EMULATE |
+| D-018 | `select_endgame_robust_move` 在激进模式总是、非激进模式在没有安全走法时 **原地排序** `scored_moves`（别名副作用），返回列表的顺序依分支而异 | 只影响返回列表的顺序 | 复现；golden 逐条比较顺序 | OPEN-EMULATE |
 
 ---
 
@@ -659,6 +664,78 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 范围：`_solve_endgame_exact`（memo key 语义）、`_best_immediate_reply_score`、`_evaluate_endgame_move_robustly`、`select_endgame_robust_move`、`_calculate_corner_safety_risk`、覆盖逻辑；场景构造中确定性的部分（`_build_legal_unknown_candidates`、`_unique_unknown_candidates`、`_score_unknown_candidate` 排序、排列 + 合法性检查 + 截断）。完整 benchmark：§3 的全部项目 + 残局（多个 occupancy、未知牌 0/1/2 张）。
 验收：exact 值、场景集合（顺序）、每个走法的 (final, safety, robust, corner) 位级相等；最终选择相等；benchmark 报告。
 
+**状态：DONE（2026-10-08）。** 用户（2026-10-08）授权 Phase 5，并要求先解决 M4-1 与 M4-2（Phase 4 审查的两个非阻塞项，因为 Phase 5 的 golden 依赖它们），不扩大为 Phase 4 的整体清理；Q-4、Q-6 保持默认（见 §9）。
+
+#### 前置：M4-1 与 M4-2（在生成任何 Phase 5 golden 之前完成）
+
+**M4-2（golden 绑定参考源码）**
+- 新增 `tools/parity/golden_sources.py`：每个 golden 文件的 header 写入 `python_version`（major.minor）与 `source_sha256`（这份 golden 依赖的每个文件的 SHA-256：`core/*.py`、`csv_compat.py`、`data/幻卡数据库.csv`、生成器本身与 `golden_sources.py`；search 另加 `ai/ai.py`；endgame 另加 `ai_server.py`、`ai/unknown_card_handler.py`、`config/unknown_card_config.py`）。`py_rules_trace.py`（`/3`）与 `py_search_trace.py`（`/2`）的 header 与 `carddb.json` 都带上这些字段（只改了生成器脚本，没有改任何 Python 业务代码；生成的记录内容不变）。
+- C#：`GoldenSources.cs`（文件集与 golden_sources.py 一一对应）重新计算工作区文件的 SHA-256 与 Python 版本；`GoldenFiles.Ensure` 发现 header 缺少绑定、文件集不同、任一哈希不同或 Python 版本不同就 **删除旧文件并重新生成**，所以 golden 不可能比它生成时的 Python 源码活得更久（Python 语义改动 → 若 C# 没跟上，会表现为 parity 不一致，而不是静默通过旧数据）。文件名与生成器版本升级（`g3`/`g2`），首次运行把所有 golden 重新生成了一遍（约 5 分钟），全部测试在新数据上通过。
+- 测试 `GoldenBindingTests`（3 个）：在临时复制的源码树上，匹配的 header 通过；对每个绑定文件改一个字节都会被检测并点名；缺文件、多文件、缺 `python_version`/`source_sha256`、Python 版本不同都判为过期；篡改后的 `carddb.json` 被判过期；真实生成的 rules/carddb/search golden 的绑定与工作区一致（生成器与 C# 的文件集一致）。
+
+**M4-1（哈希充分性，独立于哈希自己的成分列表）**
+- 新增 `ZobristSufficiencyTests`（2 个）。它们遍历完整的博弈树（Make/Undo，不经过任何搜索代码），在一个 `GameState` 内要求：(1) 哈希相同 ⇒ `ToSnapshot()` 规范化状态相同（只允许手牌顺序 D-001 与显示边 D-003 不同）：841 个 golden 局面、2,490,856 个节点、1,152,410 次换位（transposition）访问，0 个不一致；(2) 哈希相同 ⇒ 全宽暴力 minimax 的精确值位级相等（两种评估模式）：706 个局面（其中 531 个含同类规则）、605,264 个节点、162,924 次换位访问的值被比较，0 个不一致。
+- 变异检查：把 owner 从哈希里去掉（增量与重算 **同时** 去掉，使 Phase 4 的"镜像式"测试仍然自洽）→ 新测试失败（值不同、快照不同），旧的 `Incremental_hash_equals_from_scratch…` 也失败。另一个观察：type_modifier 在哈希里是 **冗余的**——一个局面里修正值由棋盘决定（审查 §12 也这么说，"保险"）——所以去掉它是等价变异，没有任何测试能（也不应该）检测到。
+- 当 `GameState` 新增字段时：先把它加进快照（这样 (1) 能覆盖），保留 (2)。
+
+#### 验收结果（全部满足）
+- [x] `dotnet build csharp/TTC.Siren.sln -c Release --no-incremental`：0 warning / 0 error。
+- [x] `dotnet test`：**78 通过 / 0 失败 / 0 跳过**（H4-1 整改后的 62 + M4-2 的 3 + M4-1 的 2 + Phase 5 的 11）；`python -m pytest -q`：29 passed；已跟踪的 `.py` 里只有两个 parity **生成器** 脚本被改（M4-2 的 header），没有任何 Python 业务代码被改动。
+- [x] **exact 值位级相等（整数）**：700 条 golden（1,400 个根值，5,376 个"第一步之后"的值，0–4 个空格，根值覆盖 −9..9）与 Python 的 `_solve_endgame_exact` 完全一致；另有独立的无 memo 暴力 minimax 交叉验证 C# 的带 memo 求解器（3 个基准局面 + 250 个 golden 局面，两个 AI 方），一致。
+- [x] **Python 自己的 memo 是可靠的**（"memo-key 语义"）：Python 在整个 `_evaluate_endgame_move_robustly` 里共享一个 cache；golden 中 5,376 个第一步值的"共享 cache"与"新 cache"结果 **0 个不同**（生成器额外在 400 条独立随机记录上做过同样的检查：4,198 个值，0 个不同）。所以 memo key 是实现细节，C# 用 Zobrist memo 得到同样的值。
+- [x] **场景集合与顺序**：500 条 golden（0–3 张未知牌，22 个无未知牌；164 条限制 NPC 卡池；369 条触达场景数上限；6,936 个场景）：合法候选 id 列表（数据库顺序）、60,960 个候选的威胁分数（`_score_unknown_candidate`，位级）、全部场景状态（规范化字符串，含手牌顺序与显示边）与 Python 逐个相同；`_unique_unknown_candidates` 800 条（去掉 2,310 个重复）顺序与内容相同。
+- [x] **每个走法的 (final, safety, robust, corner) 位级相等 + 最终选择**：400 条 golden × 2 种模式 = 800 次 `select_endgame_robust_move`，共 8,760 组走法分数（578 次精确求解路径、222 次启发式一步回应路径；普通模式有"完全安全走法"的 238 次、没有的 158 次；0/1/2/3+ 张未知牌：37/199/126/38；每条 1..24 个场景），**返回列表的顺序（Python 在某些分支原地排序 `scored_moves`）与选中的走法都与 Python 逐条相同**；分别用 Python 构造的场景与 C# 构造的场景各跑一遍，结果相同；`Select` 不改动 base 状态。
+- [x] `_calculate_corner_safety_risk`：1,500 条 golden、6,727 个 (牌, 格) 检查（3,722 个非零，占用 0..8），位级相等。`_best_immediate_reply_score`：1,500 条 × 2 个 AI 方，位级相等。
+- [x] **覆盖逻辑**：`ai_move` 里的覆盖块是内联在 Flask 处理函数里的，不能 import；golden 生成器用 AST 从 `ai_server.py` 的源码里 **提取这一段并直接执行**（找不到或不唯一就报错；源文件哈希已绑定到 golden），6,000 条合成候选表（含阈值边界值、标准走法/robust 走法不在表里、`None`）：C# `DecideOverride` 与它逐条一致（916 次覆盖，其中激进 65 次；3,904 次保持；1,180 次没有标准走法；458 次走法不在表内）。
+- [x] **未知牌场景的确定性部分与 Python 的随机部分的边界**：Python 在"合法候选为空"时会改用 `handler.generate_opponent_cards`（随机）。C# 不复现（A-7）：`ScenarioBuild.RequiresFallback = true`，调用方（Phase 7）可传入这些牌（`fallbackCandidates`）。golden 不含这种记录（生成器跳过）。
+- [x] 热路径零分配：精确求解器在 3 个局面 × 2 个 AI 方上共 8,684,790 个节点 `GC.GetAllocatedBytesForCurrentThread()` 增量 **0 字节**（`Bench exact` 每个局面 alloc 0 B）；Phase 3/4 的搜索分配测试仍为 0 字节。
+- [x] **设计约束**：精确评分有自己的 `EvalMode.ExactCardDifference`；记忆表按 (GameState, AI 方, 模式) 绑定，场景 `GameState` 之间从不共享一代表（`ExactEndgameSolver.Value` 在未绑定、AI 方不同、状态不同、评估模式不同时抛 `InvalidOperationException`，测试覆盖，并验证启发式搜索与精确求解不能互相复用同一代表）；终局值是 AI 视角的整数牌数差（不是 `EvaluateState`）。
+- [x] **变异检查**（9 处，每次改一处，对应的 Python-parity 测试必须失败，之后已还原）：corner 系数 2.2→2.1、`SafetyMargin` 0.75→0.7、robust 权重 0.45/0.55 对调、覆盖阈值 +0.05→+0.06、排序并列时 id 符号、加算组权重 8→6、候选上限差一、精确求解"无可走"局面计 0、去重保留最后一个而不是第一个：**9/9 被检测**（失败的测试见各自的 parity 测试）。
+- [x] benchmark 报告：`docs/reports/PHASE5_BENCHMARK.md`，数字见 §10。
+
+#### Phase 5 交付记录（2026-10-08）
+
+**新增 / 修改的文件**（没有修改任何 Python 业务代码）
+- `csharp/src/TTC.Siren.Search/`：`ExactEndgameSolver.cs`（精确求解 + 绑定上下文的 memo）、`EndgameScenarios.cs`（合法候选、去重、威胁分数、排序、排列与截断、场景状态）、`EndgameRobust.cs`（corner 风险、一步回应分数、robust 选择、`ShouldUse`、覆盖决策）；`SearchContext.cs` 新增 `EvalMode.ExactCardDifference`。
+- `csharp/tests/TTC.Siren.Tests/`：`EndgameDifferentialTests.cs`（8 个 Python-parity 测试：场景、unique、corner、reply、exact、robust×2、override）、`ExactEndgameSolverTests.cs`（3 个：独立暴力 minimax、上下文规则、零分配）、`ZobristSufficiencyTests.cs`（2）、`GoldenBindingTests.cs`（3）、`GoldenSources.cs`；`GoldenFiles.cs` 增加绑定检查与 endgame golden。
+- `tools/parity/golden_sources.py`、`tools/parity/py_endgame_trace.py`（新）；`py_rules_trace.py`/`py_search_trace.py`（header 绑定）。
+- `tools/bench/py_endgame_bench.py`（新）、`csharp/src/TTC.Siren.Bench/Program.cs`（新增 `exact`、`endgame`、`server` 模式）、`docs/reports/PHASE5_BENCHMARK.md`。
+
+**设计决定**
+1. **精确求解器的 memo = Zobrist 键的 `FastTranspositionTable`，上下文 (GameState, AI 方, `ExactCardDifference`)**，每个场景 `GameState` 一个 memo 代；同一个场景状态的所有第一步共享该 memo（相同状态、AI 方、模式，所以是有效复用，也与 Python "一个 cache 跨一个走法的所有场景"的目的一致；值是局面的纯函数，所以 Python 的结构化键与这里的哈希键不必相同）。没有走法的局面（秩序/混乱把手牌全部过滤掉）按当前局面计分（Python 无"过"规则）。
+2. **`EndgameRobust.Select` 对场景先克隆、对每个 (场景, 走法) 做 Make/Undo**，base 状态与场景不被改动；循环顺序是场景在外、走法在内，但每个走法的聚合仍然按 **场景顺序** 从左到右累加（`sum(list)/len(list)`，CPython 3.11 的 `sum()` 是普通累加；3.12 起改为补偿求和，所以 golden 绑定 Python 版本；精确路径是整数求和，不受影响）。整数路径的平均值是 `(double)sum / count`（int/int 真除法）。
+3. **排序**：Python `sorted(reverse=True)` 是稳定的；C# 用稳定插入排序，键为 (safety, final, robust, −corner)（激进模式 (final, robust, safety, −corner)）；`scored_moves` 在激进模式、以及非激进模式 `safe_moves` 为空时被 **原地排序**（Python 的别名副作用），返回顺序按此复现并由 golden 逐条比较。
+4. **场景构造**：Python 的 `_is_generated` / `_is_prediction` 属性与 id ≥ 1000 是未知牌的标记，C# `GameState` 没有这些属性，所以调用方传入 Python 的 `_is_generated_unknown_card` 对每个手牌槽的结果（`bool[2][]`）；场景由 `ToSnapshot()` 替换未知槽的卡后 `FromSnapshot` 得到（替换牌：基础边、无同类修正、显示边 = clamp(base)，owner 与 can_use 取自被替换的牌；与 Python `Card.copy()` 一致）。无未知牌、或没有任何排列合法时返回 base 状态本身（同一个对象），与 Python 一致。
+5. **覆盖逻辑**通过 AST 提取执行 Python 源码里的原块（而不是在生成器里再抄一遍公式），golden 因此绑定 `ai_server.py` 的内容。
+6. **Q-4**：保持，id 474/475 全 0 空行留在候选池里；golden 里的合法候选 id 列表（含 474/475）与 Python 逐项相同。**Q-6**：基线只用 CPython 3.11.4（本机没有 PyPy）。**Q-5 (b)** 对 Phase 5 的影响：robust 选择是 Python 的确定性移植，所以 **字面走法逐条相等**（不需要放宽到并列集合）；Fast/compat 搜索产生的"标准走法"来自哪里仍遵循 Q-5 (b)。
+7. golden 记录的规模为让 Python 在可接受时间内生成：精确/robust 记录的占用格数 ≥ 5（≤4 个空格）；占用 5 且有未知牌的 robust 记录用 2–4 个场景（Python 在更大的手牌上一次精确求解要好几秒）；未知槽 ≤ 3（随机牌工厂的合成 id ≥ 1000 会被 Python 当成"未知"，生成器过滤掉超过 3 个的位置，否则 Python 要排列几千万个组合）。这些都是生成器的选择，不是被测代码的限制。
+
+**新发现的差异 / 观察**（均已写入 §4；没有无法解释的差异，没有新增 BLOCKED）
+- **D-015**（OPEN-EMULATE，Phase 7 必须处理）：robust 选择对 **走子方手牌顺序** 敏感（并列时稳定排序取先出现的）。而 `ai_move` 里的 `base_state` 手牌顺序是 **标准 minimax 搜索之后** 的顺序（`Player.hand` 与 `opp_hand` 是同一个列表，搜索的 `undo_move` 把牌追加到末尾，D-001）。实测：把走子方手牌顺序反转，选中的走法在 532 次调用中有 10 次（≈1.9%，普通与激进模式各 10 次）发生变化。所以 Phase 7 想与 Python 的最终走法一致，必须用 ReferenceCompat（复现 D-001）做标准搜索并把 **搜索之后的状态** 交给 robust 选择，或明确规定一个规范手牌顺序；Fast 的遍历不同，会得到不同的手牌顺序。Phase 5 的 parity 以 Python 导出的状态（含手牌顺序）为输入，不受此影响。
+- **D-016**（观察，不影响结果）：`_evaluate_endgame_move_robustly` 的"非精确"分支（一步回应 + 角落提前返回）在生产中不可达：进入 robust 模式要求占用 ≥ 5，而 `use_exact_solver` 与 corner 风险都读取同一块棋盘（`occupancy ≥ 5`）；角落提前返回需要"非精确且 corner_risk ≥ 5"，而 corner 风险在占用 < 5 时恒为 0，所以这个提前返回 **永远不会执行**。C# 为忠实复现保留了该分支，并有 PY-QUIRK 注释；golden 覆盖了非精确路径（222 次选择），并断言该路径下 corner 风险恒为 0。
+- **D-017**（OPEN-EMULATE，复现）：`_copy_state_with_unknown_assignment` 把替换牌的 `type_modifier` 设为 0 且 **不重算** 同类修正，所以场景里的未知牌在含同类规则时没有强化/弱化，直到某张有类型的牌被打出触发重算（§1.9 已记录，现已有 golden 逐条验证）。
+- **D-018**（观察）：`select_endgame_robust_move` 在激进模式下总是原地排序 `scored_moves`，非激进模式只在没有安全走法时才这样（别名副作用）；返回的列表顺序因此依分支而不同，已复现。
+- 观察：Python 3.12 把 float `sum()` 改为补偿求和；只有在非精确（生产不可达）路径上才会因此改变数值，golden 绑定 3.11（M4-2）。
+- 观察：Python 的 memo 对共享 cache 是可靠的（见上，0 个不一致）。
+
+**已知限制**
+- 随机回退（合法候选为空时 Python 用 `handler.generate_opponent_cards`）不在 C# 内复现（A-7）；`RequiresFallback` + `fallbackCandidates` 接口留给 Phase 7。
+- 请求解析（`parse_hand` 的随机采样、`parse_board` 等）、`ai_move` 的调度（含"标准走法"的来源）与文案不在 Phase 5 范围；覆盖逻辑只移植了决策函数。
+- Python 一侧的耗时只有 CPython；没有 PyPy 基线（Q-6 默认）。
+- M4-3（搜索后的手牌顺序/显示边与 Python 对比；golden 偏向后期局面）、L4-*、O4-* 与 Phase 3 遗留项 **未处理**（Phase 5 不依赖它们；D-015 说明了与 M4-3 的关系：手牌顺序对 robust 选择有影响，Phase 7 需要处理）。
+- Phase 5 的改动没有经过独立审查。
+
+#### Benchmark review remediation（2026-10-08，`docs/reviews/OPUS_PHASE5_BENCHMARK_REVIEW.md`，结论 `BENCHMARK_VALID_WITH_CAVEATS`；目标 `.claude/sonnet_review_fix_goal.md`）
+
+正确性没有问题（节点数、分数位级、走法、72/72 选择全部不变），但 benchmark 数字有偏差，已更正。只改了 benchmark 工具与文档，**没有改动** `TTC.Siren.Core` / `TTC.Siren.Search` / 任何测试断言 / Python 业务代码 / parity 生成器，也没有做任何性能优化。
+- **A-1（分层 JIT）**：`Bench` 现在默认 warm（整组项目预热 1500 ms 后才计时），`--cold` 保留旧行为，所有表标注 warm/cold 并给出 min/median/max；`fast` 轮换三个变体的测量顺序；计时区域只含搜索调用。22 项固定深度合计：warm 0.0225–0.0233 s，cold 0.051–0.053 s。"49.7×" 是冷 JIT 数字（cold 53–63×，warm 119×）。
+- **A-2（263× 撤回）**：那次 Python 计时 15.58 s 被后台 golden 生成污染；交替重测 Python 10.24–10.67 s，C# 0.0622–0.0651 s，**161–167×**，其中 1.235× 是 memo 键（工作量 297,935 → 241,264），每次 make_move 约 131×。与评审的 9.95–10.21 s 相差 1–5%。
+- **A-3/L5-3**：新增 `tools/bench/run_interleaved.py`（Python/C# 交替，≥ 3 轮）；`py_bench.py` 与 `py_endgame_bench.py` 打印 min/median/max。**A-4**：逐项以 µs 打印，< 50 µs 标 `*`，每项都有 NPS。**A-6**：`fast` 轮换顺序（Fast/TT 关 仍为 1.49×）。
+- **工作量对比**：`tools/bench/count_robust_work.py` 与 `Bench endgame-work`：robust 流水线 Python 418,990 对 C# 389,990 次 make_move（1.074×）。**L5-6**：`csharp/.gitignore` 加入 `.vs/`。
+- 详细数字、可信范围与全部声明见 `docs/reports/PHASE5_BENCHMARK.md` 的 "Corrections after the Opus benchmark review" 一节与 §10。Phase 6 未开始。
+
+- **A-7（CPU 核心放置，2026-10-08，评审 §12.4）**：混合 CPU 上 P/E 核放置会让同一运行相差 1.3–2×，已加 `tools/bench/pin.py` 与 `run_interleaved.py --affinity`（两边都固定在同一 CPU 集，默认检测 P 核集，本机 `0xFFF`），harness 表头打印实际亲和性；可信比值现在都是"两边固定在 P 核"的值（fixed warm 116–118×、exact 161–162×、robust warm 169–175×），记录见 §10 与报告的 "A-7" 一节。**暂定，待用户确认（用户对"中位数还是范围"只回复了"继续"，没有给出选择；助手按最保守的方式处理，这不等于用户批准了某个数字，可一句话改动）**：fixed cold 的 11 轮比值 57.5–91.0×（中位数 70.1×），个别轮超出评审的 55–73× 范围 15% 以上；口径是**同时写出完整范围与中位数**——"57–91×（中位数 70×）"——而不是单个数字。Phase 6 未开始。
+
 ### Phase 6 — Profiler 驱动优化
 
 范围：用 dotnet-trace / BenchmarkDotNet 找热点，每次改动都走 CLAUDE.md §6 的流程；可能的方向（必须先测量）：增量评估、ordering 计算缓存、TT 大小与布局、残局 α-β（值必须保持精确）。单线程完成后，经用户批准才做 root parallelism。
@@ -701,6 +778,8 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | A-15 | **Q-5 = 选项 (b)**：Fast 的根分数必须与精确的深度限制 minimax 值位级相等；根走法只允许在精确并列集合内与 compat/Python 不同，每个差异都要验证并报告；Fast 必须确定性 | 值级结果可精确验证，同时允许 TT 走法优先等排序改进；Python 的 TT（D-006）本身已不等于精确 minimax，所以"与 Python 一致"早已缩小为"与精确值一致" | 已定（用户，2026-10-07） |
 | A-16 | Fast 的 oracle = ReferenceCompat 关闭 TT（`UseTranspositionTable=false`），并用独立的全宽 minimax 交叉验证；Fast 的 TT 只在同深度复用分数，不存被中断节点，bound 按原始窗口分类 | 避免 oracle 与被测对象共享同一个缺陷；D-006 使 compat（TT 开）不能当精确值 | 已定（Phase 4） |
 | A-17 | Zobrist 哈希在 make 中增量更新，undo 恢复保存的哈希；哈希只覆盖决定局面价值的信息（格子→实例、owner、修正值、行动方），不含手牌顺序与显示边 | 排序相关状态（D-001/D-003）不影响分数；O(1) 的 undo 不会漂移 | 已定（Phase 4） |
+| A-18 | 精确残局求解器的 memo 是 Zobrist 键的 `FastTranspositionTable`，上下文 (GameState, AI 方, `EvalMode.ExactCardDifference`)，每个场景 `GameState` 一个 memo 代，不与任何启发式搜索共用；终局值是整数牌数差 | Python 的结构化 memo 键只是实现细节（值是局面的纯函数，已验证 Python 共享 cache 与新 cache 无差异）；H4-1 的上下文规则必须适用于新的评分类型 | 已定（Phase 5） |
+| A-19 | golden 数据绑定到参考源码：header 写入 Python major.minor 与每个依赖文件的 SHA-256，C# 不匹配就重新生成；覆盖逻辑通过 AST 从 `ai_server.py` 提取原块执行，而不是复制公式 | 避免 golden 比 Python 源码活得更久（审查 M-1/M4-2）；内联在 Flask 处理函数里的逻辑无法 import | 已定（Phase 5） |
 
 ---
 
@@ -711,11 +790,11 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | ID | 问题 | 默认做法（未回复时） | 必须在何时之前决定 |
 |---|---|---|---|
 | Q-1 | ~~D-002 是否同时修复 Python 和 C#？~~ **已决定：修复（用户，2026-10-07），已完成，D-002 = FIXED-BOTH。** | — | 已关闭 |
-| Q-2 | D-004（手牌内 card_id 重复导致状态损坏）：在 Python 侧修复（按卡身份移除），还是只在输入层拒绝/报告？ | C# 按卡身份处理，遇到重复输入抛异常，parity 中排除 | Phase 7 前 |
+| Q-2 | ~~D-004（手牌内 card_id 重复导致状态损坏）：在 Python 侧修复（按卡身份移除），还是只在输入层拒绝/报告？~~ **已决定：Python 与 C# 都修复（用户，2026-10-09）**；在 `.claude/phase6_goal.md` 步骤 B 中实施（独立提交，先于 Phase 6 的性能基线）。另外用户决定：**D-015 → Phase 7 用 Fast + 规范手牌顺序**；**授权 Phase 6**；**授权把 Phase 5 的提交推送到 `origin/csharp-solver-migration`**（不动 main、不提 PR；之后的提交只在本地，推送需另行授权） | — | 已关闭 |
 | Q-3 | D-013 连携只有一层：确认这是有意设计吗？ | 保持 Python 行为 | Phase 8 前（不影响 parity） |
-| Q-4 | D-012 卡库 474/475 全 0 空行是否应从候选池中排除？ | 保持 | Phase 5 前 |
+| Q-4 | D-012 卡库 474/475 全 0 空行是否应从候选池中排除？ | 保持 | Phase 5 前（**Phase 5 按默认保持；golden 的合法候选 id 列表含 474/475，与 Python 一致**；若用户之后要排除，Python 与 C# 要同时改） |
 | Q-5 | ~~Fast 模式中，同分并列时是否允许选择与 Python 不同的走法？~~ **已决定：选项 (b)（用户，2026-10-07）——只允许在分数位级完全相等的走法之间不同，并逐条验证、报告；已在 Phase 4 完成，见 §7。** | — | 已关闭 |
-| Q-6 | 是否需要 PyPy 的 baseline（生产构建使用 PyPy，本机未安装）？ | 只用 CPython baseline | Phase 5 前 |
+| Q-6 | 是否需要 PyPy 的 baseline（生产构建使用 PyPy，本机未安装）？ | 只用 CPython baseline | Phase 5 前（**Phase 5 按默认只用 CPython 3.11.4**；`docs/reports/PHASE5_BENCHMARK.md` 注明了这一点） |
 
 ---
 
@@ -751,17 +830,34 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | 2026-10-07 | 4 | 同上 | **变体 B（最终：A + depth-1 非根节点不排序）**：Fast 1.5272 / 1.4381 / 1.4746 s → 中位数 **1.4746 s**（3,625,620 节点，叶子被计数）；同批 compat TT 关闭 2.2668 / 2.1782 / 2.2076 → **2.2076 s**；compat TT 开 2.3574 / 2.3104 / 2.2853 → **2.3104 s** | **Fast 比 compat TT 关闭快 1.50×，比 compat TT 开（Python 语义）快 1.57×**；B 相对 A −17% 时间，每次运行都更快，保留。所有项的根分数与 oracle 位级相等（`Bench fast` 每行打印 same/DIFF，全部 same） |
 | 2026-10-07 | 4 | 同上，最终二进制再测一次（`Bench fast 5`，每项 5 次中位数） | Fast 1.5285 s / compat TT 关闭 2.3098 s / compat TT 开 2.6670 s（d≥4 合计）；单项如 open_none d7：Fast 0.2937 s、TT 关闭 0.4854 s、TT 开 0.7854 s；open_same_plus d7：0.4398 / 0.7064 / 0.6740 s；open_all_rules d6：0.3815 / 0.5100 / 0.5442 s | 1.51× / 1.74×；机器负载变化大（同一项在不同批次相差可达 ±30%），因此以同一批内的比值为准；NPS 随变体的节点计数方式而变，不作为结论；与 Python 的 NPS 对比留给 Phase 5 |
 | 2026-10-07 | 4 整改 H4-1 | C# `Bench fast 3`，d≥4 合计，各 3 次独立运行（Fast / compat TT 关闭 / compat TT 开，秒） | 整改前：Fast 2.2973 / 2.0970 / 1.5308，TT 关闭 3.5098 / 3.1323 / 2.3803，TT 开 3.5902 / 3.4099 / 2.4902；整改后：Fast 1.6121 / 1.5671 / 1.5680（中位数 **1.5680 s**），TT 关闭 2.4802 / 2.4941 / 2.3806，TT 开 2.5850 / 2.4428 / 2.5200 | 节点数完全不变（3,431,185 / 3,771,758 / 3,625,620）。机器负载在两批之间变化大（整改前前两次比第三次慢约 40%），绝对时间不可比；同批比值 Fast/TT 关闭：整改前 1.53× / 1.49× / 1.55×（中位数 1.53×），整改后 1.54× / 1.59× / 1.52×（中位数 1.54×）；整改前最快一批 1.5308 s 对整改后中位数 1.5680 s = +2.4%，**无超过 5% 的回归**（检查只在 `Begin`，每次搜索一次） |
+| 2026-10-08 | 5 | Python（CPython 3.11.4）vs C# Release，robust 残局全流程（`_build_endgame_scenarios` + `select_endgame_robust_move` 普通 + 激进），72 个确定性局面（种子 20261010；占用 5/6/7/8 × 未知 0/1/2 × 每格 6 个） | Python 8.7144 s（每次调用 3 次中位数之和）；C# 0.07786 / 0.07989 / 0.07969 s（每次调用 5 次中位数，3 次独立运行）→ 中位数 **0.07969 s** | **≈ 109×**（单次运行 111.9×）；72/72 个选择与 Python 相同；分格数据见 `docs/reports/PHASE5_BENCHMARK.md`（占用 5、未知 2：209×；占用 8：39–44×） |
+| 2026-10-08 | 5 | 同上，精确求解器 `_solve_endgame_exact`（§3.6 的 end5 / mid4 + `mid3_ascension`），根值 | Python 中位数（3 次）0.00381 / 0.05012 / 15.58 s（217 / 4,707 / 297,935 次 make_move）；C#（3 次独立运行的中位数）0.00004 / 0.00082 / 0.05918 s（217 / 4,707 / 241,264 次 make_move），0 B 分配 | ≈ 95× / 61× / 263×；值相同（1 / −2 / −1）；C# 的 memo 与手牌顺序无关，所以 mid3 的 make 次数更少 |
+| 2026-10-08 | 5 | §3.4 的 22 个固定深度项合计（43,003 节点），Python 与 C# ReferenceCompat，各 3 次 | Python 2.592 / 2.603 / 2.732 s → **2.603 s**；C# 0.0528 / 0.0516 / 0.0524 s → **0.0524 s** | ≈ 49.7×；节点数、分数、走法与 Python 相同（Phase 3 parity）；Phase 3 记录的 2.965 s 是另一次测量，两次相差在机器噪声范围内 |
+| 2026-10-08 | 5 | 服务端等价调用 `max_depth=10`、`max_time=10`（§3.5），3 次 | Python：open_none 深度 5（187,537 / 187,078 / 187,870 节点）、open_same_plus 深度 5（178,099 / 176,681 / 178,213）、mid3_ascension 深度 10（30,500 节点，2.6 s）；C# ReferenceCompat：10 层 / 15.9 M 节点（8.8 s）、9 层 / 16.5–16.7 M、10 层 / 30,500（0.03 s）；C# Fast：9 层 / 2,566,250 节点 / 0.93 s、9 层 / 3,915,260 / 1.54 s、6 层 / 8,651 / 0.01 s | 走法在所有实现与所有次数中相同（27@(2,2)、27@(2,2)、53@(1,2)）；Fast 因整棵树搜完（深度 = 空格数，D-014）而停止；墙钟相关，深度随机器速度而变 |
+| 2026-10-08 | 5 | Phase 4 的 `Bench fast`（d ≥ 4，3 次运行，Fast / compat TT 关闭 / compat TT 开） | Fast 1.3272 / 1.3304 / 1.3388 s，TT 关闭 2.0227 / 2.0234 / 2.0222 s，TT 开 2.1175 / 2.1230 / 2.1352 s（节点 3,625,620 / 3,771,758 / 3,431,185） | Fast ≈ 1.52× 于 TT 关闭、≈ 1.60× 于 Python 语义的 compat；与 Phase 4 同一代码（只是这一批机器负载更低，所以绝对值比 Phase 4 的记录小） |
+| 2026-10-08 | 5 更正 | **更正说明**（审查 `docs/reviews/OPUS_PHASE5_BENCHMARK_REVIEW.md`；详见 `docs/reports/PHASE5_BENCHMARK.md` 的 "Corrections" 一节） | 上面 2026-10-08 的 Phase 5 行里：**"≈ 263×"（精确求解器）撤回**（那次 Python 计时 15.58 s 与后台生成 golden 的进程重叠，被污染）；**"≈ 49.7×"（22 项）是冷 JIT 数字**；robust 流水线的 109.4×/111.9× 是冷 JIT 数字；分格比值（31.8×…209.4×）是运行顺序的假象（占用 5 的格子最先跑，在 tier-0 代码上），不要再引用 | 之前的行保留作记录；以下面的新行为准 |
+| 2026-10-08 | 5 更正 | `Bench` 改造（B-1/B-2）：默认 **warm**（先把整组项目反复预热 1500 ms 再计时），`--cold` 保留旧行为；每张表标 warm/cold，输出 min/median/max；逐项以 µs 打印，< 50 µs 标 `*`（受计时精度限制）；`fast` 三个变体轮换测量顺序；计时区域只含搜索/求解调用。`Bench search` 22 项合计，3 次独立进程运行 | warm：0.02333 / 0.02289 / 0.02306 s（评审的稳态 0.024–0.025 s）；cold：0.05104 / 0.05177 / 0.05287 s（旧配置约 0.05 s）。`open_none` d4：cold 25.6 ms（0.62 M NPS，min 8.6 / max 36.2 ms），warm 8.8 ms（1.80 M NPS）；`open_same_plus` d4：1.67–1.70 M NPS（两种模式） | 节点数（43,003）与 22 项分数位级与改造前逐项相同；`fast` 40 行节点数相同且全部 `same`；`exact` 的值、make_move、节点、memo 命中相同；`endgame` 72/72；`search`/`fast`/`exact` 分配列 0 |
+| 2026-10-08 | 5 更正 | **Python/C# 交替运行**（B-3，`tools/bench/run_interleaved.py --rounds 3`；Python 与 C# 一轮一轮交替，同一负载）：22 项固定深度，C# warm | Python 2.6816 / 2.7109 / 2.7451 s；C# 0.02252 / 0.02280 / 0.02300 s（min / median / max）；比值 **118.9 / 119.1 / 119.3×** | 节点数 43,003 两边相同 |
+| 2026-10-08 | 5 更正 | 同上，C# cold（`--cold`） | Python 2.7300 / 2.7554 / 2.7984 s；C# 0.04404 / 0.04684 / 0.05237 s；比值 **53.4 / 58.3 / 62.6×** | 旧 "49.7×" 对应此配置（分批测量） |
+| 2026-10-08 | 5 更正 | 同上，精确求解器 `mid3_ascension`（warm，3 轮） | Python 10.239 / 10.325 / 10.393 s（297,935 次 make_move）；C# 0.0636 / 0.0639 / 0.0646 s（241,264 次）；比值 **161 / 161 / 162×**；每次 make_move：Python 34.7 µs，C# 0.265 µs → **≈ 131×**，工作量比 1.235 | 单独测 Python：10.35 / 10.47 / 10.49 s；评审测得 9.95–10.21 s，相差 1–5%（< 20%，无需人工取舍）。cold：Python 10.36 / 10.61 / 10.67 s，C# 0.0622 / 0.0649 / 0.0651 s，**163 / 164 / 167×**。小局面：`mid4_rev_ace` 245–308×（warm）/ 65–73×（cold），`end5_same_plus` 205–251×（warm，C# 14–17 µs，受计时精度限制）/ 86–99×（cold）；两者工作量比 1.000 |
+| 2026-10-08 | 5 更正 | 同上，robust 流水线 72 个局面（warm / cold，各 3 轮） | warm：Python 9.1822 / 9.2005 / 9.5797 s，C# 0.04987 / 0.05081 / 0.05161 s，**177.9 / 184.5 / 188.5×**；cold：Python 9.0262 / 9.1422 / 9.2154 s，C# 0.08035 / 0.08243 / 0.08264 s，**110.9 / 111.5 / 112.3×** | 72/72 选择相同（每轮）；单次 warm 的分格比值 44–198×（占用 5：55 / 183 / 198×），见报告 C5 |
+| 2026-10-08 | 5 更正 | robust 流水线的工作量对比（B-4，不计时；`tools/bench/count_robust_work.py` 与 `Bench endgame-work`；72 个局面 × 2 种模式，含每个场景的第一步） | Python **418,990** 次 make_move（每种模式 209,495），C# **389,990**（194,995），**1.074×**；两边评估的 (走法, 场景) 对相同：10,834 | 在相等工作量下 warm ≈ 172×，cold ≈ 104×。只有占用 5 的格子工作量不同（C# 每个场景一个 memo、Python 每个走法一个 cache） |
+| 2026-10-08 | 5 更正 | `Bench fast`（Phase 4，d ≥ 4，5 次，轮换顺序），warm / cold | warm：TT 开 2.2288 s（2.1865–2.3197），TT 关 2.0791 s（2.0504–2.1300），Fast 1.3911 s（1.3521–1.4625）；cold：2.1897 / 2.0652 / 1.3830 s | Fast / TT 关 **1.49×**，Fast / TT 开 **1.60×**（warm）、1.58×（cold）。Fast 的节点数与 NPS **不能** 与 Python 或 ReferenceCompat 比较（不同的树，且把未排序的叶子计为节点） |
+| 2026-10-08 | 5 更正 | 可信范围（对 CPython 3.11.4，单线程，本机，观察到的 3 轮 min–max，不是统计置信区间） | Python 语义搜索（相同节点）：cold 53–63×，warm 119×；robust 流水线：cold 111–112×，warm 178–189×（其中 1.074× 是工作量）；大残局精确求解：161–167×（其中 1.235× 是 memo 键）；Fast 对 TT 关闭：1.49× | **PyPy 未测量**（Q-6），所有比值只对 CPython 3.11.4；单一口径："≈ 55–190×（取决于工作负载与 JIT 预热），对 CPython 3.11.4，PyPy 未测"。不要引用 263× 或 49.7× |
+| 2026-10-08 | 5 A-7 | **CPU 核心放置（A-7）**：本机 i7-13650HX 是混合 CPU（P 核 6 个 = 逻辑处理器 0–11，掩码 `0xFFF`；E 核 8 个 = 12–19，`0xFF000`），Windows 把长时间单线程运行非确定性地放在 P 或 E 核上。`tools/bench/pin.py` + `run_interleaved.py --affinity`：子进程以挂起状态创建、先设亲和性掩码再恢复（.NET 运行时因此按受限的 CPU 集启动），C# 直接启动已构建的 `TTC.Siren.Bench.exe`；掩码由 OS 的效率类检测（`--affinity auto`）或显式给出（`FFF`）；`Bench`/`py_bench.py`/`py_endgame_bench.py` 的表头打印它们实际运行的掩码，runner 校验并在每个结果行打印 | 同一份 Python 固定深度套件：未固定 2.68–2.75 s（一批）/ 3.40–3.47 s（另一批），固定到 P 核 3.04–3.10 s，固定到 E 核 4.72–4.74 s | **以后所有可信比值都是"两边都固定在 P 核集 `0xFFF`"**；未固定的运行在混合 CPU 上不可复现（runner 会警告）；C#-对-C# 的 Baseline→Compare 也必须固定到同一个集合（E 核让 C# 慢 1.3–1.4×） |
+| 2026-10-08 | 5 A-7 | 两边固定在 P 核 `0xFFF`，3 轮交替，warm C#（min / median / max） | fixed：Python 3.0420 / 3.0725 / 3.1000 s，C# 0.02625 / 0.02625 / 0.02635 s，**115.9 / 116.6 / 118.1×**；exact（3 个局面）：Python 11.3794 / 11.4229 / 11.5766 s，C# 0.07024 / 0.07052 / 0.07186 s，**161.1 / 162.0 / 162.0×**（`mid3_ascension` Python 11.312 / 11.358 / 11.509 s，C# 0.06999 / 0.07018 / 0.07163 s）；robust 流水线：Python 9.7953 / 10.0004 / 10.0500 s，C# 0.05730 / 0.05788 / 0.05823 s，**169.2 / 172.6 / 174.5×** | 节点数 43,003、exact 值 1/−2/−1、72/72 选择每轮相同；与评审的 P 核固定值一致（fixed 118–121×、robust 178–189×、exact 150–180×；差在 15% 内） |
+| 2026-10-08 | 5 A-7 | 同上，cold C#（`--cold`） | fixed：Python 2.8286 / 2.9547 / 3.0894 s，C# 0.03396 / 0.03591 / 0.04685 s，**60.4 / 82.3 / 91.0×**；exact：**159.5 / 170.2 / 174.5×**（`mid3_ascension` Python 10.707 / 10.870 / 11.112 s，C# 0.06176 / 0.06482 / 0.06664 s）；robust：Python 9.1942 / 9.4752 / 9.5828 s，C# 0.07799 / 0.08463 / 0.08564 s，**108.6 / 110.6 / 122.9×** | **暂定，待用户确认**：fixed cold 的第 1 轮 91.0× 比评审的 55–73× 上界高 25%（超过目标文件的 15% 带），中位数 82.3× 在带内。再跑 8 个固定到 `0xFFF` 的 cold 轮（仅 fixed）：83.6 / 57.5 / 59.4 / 81.9 / 81.0 / 70.1 / 63.0 / 63.8×；11 轮合计 **57.5–91.0×，中位数 70.1×**；C# cold 总时间呈双峰（约 0.035 s 或约 0.048 s，取决于 tier-1 代码何时到位），Python 稳定。用户只回复了"继续"，助手按最保守的方式暂定口径（不等于用户批准）：**同时写出完整范围与中位数（"57–91×，中位数 70×"），不写单个数字，也不收窄成"可信区间"**；可一句话改动 |
+| 2026-10-08 | 5 A-7 | 两边固定在 E 核 `0xFF000`，warm，3 轮（记录核心类别的影响） | fixed：Python 4.7197 / 4.7386 / 4.7398 s，C# 0.03666 / 0.03679 / 0.03726 s，126.7 / 128.8 / 129.2×；exact：Python 16.4582 / 16.6698 / 17.4180 s，C# 0.09320 / 0.09331 / 0.09345 s，176.4 / 178.4 / 186.9×；robust：Python 15.4046 / 15.4759 / 15.7849 s，C# 0.08032 / 0.08238 / 0.08300 s，186.4 / 187.0 / 196.5× | E 核让 Python 慢 1.46–1.55×、C# 慢 1.32–1.42×；两边同类时比值只高 8–10%，**混合放置**才会破坏比值（评审曾见 271× / 301×，P 核固定的真实值约 162× / 173×） |
 | 2026-10-07 | 2 | Python（参考） | `_solve_endgame_exact` 复测 | end5: 217 make / 0.004 s；mid4_rev_ace: 4,707 make / 0.055 s（≈85k make/s） | 与 Phase 1 一致；Python 的 make/s 含 minimax 与 memo 开销，不是纯 make/undo，不可直接比 |
 
 ---
 
 ## 11. 下一步行动
 
-0. **Phase 1–4 完成。Phase 5（精确残局 + 信息集 robust 残局 + Python-vs-C# 全量 benchmark）尚未开始，等待用户明确授权**（CLAUDE.md：一次只授权一个阶段；可以用 `/goal @.claude/phase_goal.md` 授权，它会选中 Phase 5）。审查门禁 `PASS_TO_PHASE_4` 已完成其使命；Phase 4 的改动没有经过独立审查——如果需要，可以像 Phase 2+3 那样让审查者复核 Phase 4（重点：`FastSearcher` 的 bound 语义、Zobrist 覆盖范围、Q-5 并列集合验证）。
-1. Phase 5 开始前需要用户决定：**Q-4**（474/475 空行是否从候选池排除；默认保持）、**Q-6**（是否需要 PyPy baseline；默认只用 CPython）。均有默认值，未回复时按默认。
-2. Phase 5 的注意事项：精确残局的终局值必须是 AI 视角的牌数差（`_solve_endgame_exact`），**不能** 复用 `EvaluateState`/`EvaluateMove` 当值；Fast 的 `FastTranspositionTable`/Zobrist 可以复用于残局 memo（Python 的 memo key 包含手牌顺序，见 §1.8，复现时要注意）。
-3. 工作区状态：Phase 4 的全部改动 **尚未提交**（`git status`：`CSHARP_MIGRATION.md`、`GameState.cs`、`CompatSearcher.cs`、`Bench/Program.cs` 已修改；`ZobristKeys.cs`、`FastSearcher.cs`、`FastTranspositionTable.cs`、`ZobristTests.cs`、`FastSearchTests.cs` 为新文件）。用户没有要求就不要 commit/push（CLAUDE.md §8）。PR #1 已关闭，`main` 仍是 `eb60a02`。
-4. 仍未处理的审查遗留项：M-1 到 M-3、L-1 到 L-12、O-1 到 O-5（见 §12.7）。
+0. **Phase 1–5 完成。Phase 6（Profiler 驱动优化，单线程；root parallelism 需单独批准）尚未开始，等待用户明确授权**（CLAUDE.md：一次只授权一个阶段；可以用 `/goal @.claude/phase_goal.md` 授权，它会选中 Phase 6）。Phase 4 的审查门禁 `PASS_TO_PHASE_5` 已完成其使命；**Phase 5 的改动没有经过独立审查**——如果需要，可以像 Phase 2+3、Phase 4 那样让审查者复核 Phase 5（重点：D-015 的手牌顺序影响、精确求解器 memo 的上下文规则、场景构造与 Python 的排序/排列/截断、覆盖逻辑的 AST 提取、golden 的源码绑定）。
+1. 工作区状态：Phase 5 的全部改动 **尚未提交**（已修改：`CSHARP_MIGRATION.md`、`csharp/src/TTC.Siren.Bench/Program.cs`、`csharp/src/TTC.Siren.Search/SearchContext.cs`、`csharp/tests/TTC.Siren.Tests/GoldenFiles.cs`、`tools/parity/py_rules_trace.py`、`tools/parity/py_search_trace.py`；新增：`ExactEndgameSolver.cs`、`EndgameScenarios.cs`、`EndgameRobust.cs`、`EndgameDifferentialTests.cs`、`ExactEndgameSolverTests.cs`、`ZobristSufficiencyTests.cs`、`GoldenBindingTests.cs`、`GoldenSources.cs`、`tools/parity/golden_sources.py`、`tools/parity/py_endgame_trace.py`、`tools/bench/py_endgame_bench.py`、`docs/reports/PHASE5_BENCHMARK.md`；`tools/bench/endgame_bench_positions.json` 是生成物，可以重新生成）。用户没有要求就不要 commit/push（CLAUDE.md §8）。`csharp/.vs/` 是 Visual Studio 的本地目录，不是本工作产生的，不应提交。PR #1 已关闭，`main` 仍是 `eb60a02`。
+2. Phase 6 开始前不需要用户回答问题。已有默认的待决问题：Q-2（D-004，Phase 7 前）、Q-3（连携一层，Phase 8 前）、Q-6（PyPy baseline，按默认 CPython）。
+3. 仍未处理的审查遗留项：M4-3（搜索后的手牌顺序/显示边与 Python 对比、golden 偏向后期局面——**D-015 说明手牌顺序对 robust 选择有影响，Phase 7 前必须处理**）、L4-1 到 L4-7、O4-1 到 O4-3、Phase 3 的 L-1 到 L-12 与 O-1 到 O-5（见 §12.7）。
 
 ---
 
@@ -780,10 +876,11 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
   5. `d0ef721` csharp：`TTC.Siren.sln`、`src/TTC.Siren.Bench`、`tests/TTC.Siren.Tests`
   前 4 个提交单独 checkout 时无法构建整个解决方案（`.sln` 在第 5 个提交里）。
 - **PR #1（`csharp-solver-migration` → `main`）已创建后又被用户要求不要提到 `main`，现已关闭**（状态 CLOSED，可 reopen）。`origin/main` 仍是 `eb60a02`，从未被修改。用户的原话意思是："如果已经提交到 `csharp-solver-migration` 了，就不要再提 `main`"。因此提交保留在分支上；**撤销它们需要强制推送，没有得到授权**。若用户之后明确要求撤销，选项是：(a) 本地与远端回退到 `eb60a02`（需要用户明确授权强制推送）；(b) 追加反向提交。
-- **（Phase 4 之后）未提交的改动**：`CSHARP_MIGRATION.md`、`csharp/src/TTC.Siren.Core/GameState.cs`、`csharp/src/TTC.Siren.Search/CompatSearcher.cs`、`csharp/src/TTC.Siren.Bench/Program.cs`（已修改）；`ZobristKeys.cs`、`FastSearcher.cs`、`FastTranspositionTable.cs`、`ZobristTests.cs`、`FastSearchTests.cs`（新文件）。CLAUDE.md §8：用户没有要求就不要 commit/push。
+- **（Phase 4 的改动已提交并推送：`1f2d0a9` Zobrist、`9faf189` Fast 搜索与 H4-1、`710a70e` 文档，用户于 2026-10-08 要求推送；HEAD `710a70e`。）下面一条是 Phase 4 完成当时的状态，保留作记录：**
+- **（Phase 4 之后，当时）未提交的改动**：`CSHARP_MIGRATION.md`、`csharp/src/TTC.Siren.Core/GameState.cs`、`csharp/src/TTC.Siren.Search/CompatSearcher.cs`、`csharp/src/TTC.Siren.Bench/Program.cs`（已修改）；`ZobristKeys.cs`、`FastSearcher.cs`、`FastTranspositionTable.cs`、`ZobristTests.cs`、`FastSearchTests.cs`（新文件）。CLAUDE.md §8：用户没有要求就不要 commit/push。
 - 本机 git 会提示 "LF will be replaced by CRLF"（`core.autocrlf`），无害。
 
-### 12.2 已完成的阶段与用户决定（Phase 4 的行见表末）
+### 12.2 已完成的阶段与用户决定（Phase 4、5 的行见表末）
 
 | 项 | 状态 | 用户决定 / 备注 |
 |---|---|---|
@@ -797,7 +894,11 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | 创建 PR → 撤回 | 见 12.1 | 用户要求"撤销提交；已推送到分支就不要提到 main" → 关闭 PR #1，保留分支提交 |
 | **Q-5** | **决定：选项 (b)** | 用户，2026-10-07：Fast 只允许在分数完全相等的走法之间与 Python 不同，逐条验证、报告 |
 | **Phase 4** Zobrist / bound-aware TT / Fast | **DONE**（2026-10-07，`/goal @.claude/phase_goal.md` + Q-5 = (b)） | 验收见 §7 Phase 4；改动未提交 |
-| **Phase 5** | **未开始** | 需要用户明确授权 |
+| 独立审查 Phase 4 | 初审 `BLOCK_PHASE_5`（H4-1），整改后 **`PASS_TO_PHASE_5`** | `docs/reviews/OPUS_PHASE4_REVIEW.md`（§13 复审） |
+| 推送分支 | DONE | 用户于 2026-10-08 明确要求：`d0ef721..710a70e` 推送到 `origin/csharp-solver-migration`（`main` 未动） |
+| M4-1、M4-2 | DONE（2026-10-08） | 用户要求在生成任何 Phase 5 golden 之前先解决，不扩大为 Phase 4 清理 |
+| **Phase 5** 精确残局 / robust / 场景 / benchmark | **DONE**（2026-10-08，`/goal @.claude/phase_goal.md`） | 验收见 §7 Phase 5；Q-4、Q-6 保持默认；改动未提交 |
+| **Phase 6** | **未开始** | 需要用户明确授权 |
 
 ### 12.3 代码地图（`csharp/`，.NET `net10.0`，`Nullable`、`TreatWarningsAsErrors`）
 
@@ -811,24 +912,28 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
   - `CompatTranspositionTable.cs`（Python TT 的模拟：128 位 `PythonStateKey` 摘要；无 bound 类型；按需翻倍扩容，硬上限默认 2^25 槽 = 1 GiB，超过抛 `TranspositionTableFullException`；代际号 O(1) 清空）
   - `CompatSearcher.cs`（`RunFixedDepth`、`RunFixedDepthAs`、`RunIterativeDeepening`、`SearchStats`、`SearchLimits`（墙钟 + 测试用节点预算）；入口处 `try/finally` 回退状态；`UseTranspositionTable=false` 为 Phase 4 的 oracle）
   - **Phase 4**：`FastTranspositionTable.cs`（固定大小、2 项一桶、bound-aware、代际号）、`SearchContext.cs`（H4-1：`SearchContext`(GameState, AI 方, `EvalMode`) 与 `EvalMode`；表只在相同上下文下可复用）、`FastSearcher.cs`（Fast：Zobrist 键 + bound TT + TT 走法优先；`RunFixedDepth`/`RunIterativeDeepening`，`clearTable` 参数）；Core 里的 `ZobristKeys.cs` 与 `GameState.ZobristHash`/`ComputeZobristHash()`
-- `src/TTC.Siren.Bench`：`makeundo`（Make/Undo 吞吐）与 `search`（22 项固定深度）两种模式。
-- `tests/TTC.Siren.Tests`（xUnit，**62 个测试**；H4-1 整改新增 `FastTableContextTests`(4)；Phase 4 新增 `ZobristTests`(4)、`FastSearchTests`(8，含 `Oracle` 辅助)、`FastTranspositionTableTests`(3)）：`RulesTraceDifferentialTests`、`PortedRuleTests`、`GameStateBehaviourTests`（D-001/3/4、CardDb 对照 Python 等）、`SearchDifferentialTests`（评估 / 固定深度 / ID+超时 / TT key 四个）、`SearchBehaviourTests`、`SearchExceptionSafetyTests`（H-1）、`CompatTtGrowthTests`（H-2，含 30 s 的服务端等价测试）、`MoveIdentityTests`（H-3）、`AllocationTests`/`SearchAllocationTests`（0 字节）；辅助 `GoldenFiles`、`SearchGolden`。
-- Python 侧工具：`tools/parity/py_rules_trace.py`、`py_search_trace.py`（golden 生成器，只 import 参考实现）、`tools/bench/py_bench.py`（基准脚本，用法 `python tools/bench/py_bench.py <repo_root> fixed|exact|server|all`）。
+  - **Phase 5**：`ExactEndgameSolver.cs`（精确求解 + 绑定上下文的 memo）、`EndgameScenarios.cs`（合法候选/去重/威胁分数/排序/排列截断/场景状态）、`EndgameRobust.cs`（corner 风险、一步回应、`Select`、`ShouldUse`、`DecideOverride`）；`EvalMode.ExactCardDifference`
+- `src/TTC.Siren.Bench`：`makeundo`、`search`、`fast`、`exact`、`endgame`（需要 `tools/bench/endgame_bench_positions.json`，由 `py_endgame_bench.py` 生成）、`server` 模式。
+- `tests/TTC.Siren.Tests`（xUnit，**78 个测试**；Phase 5 新增 `EndgameDifferentialTests`(8)、`ExactEndgameSolverTests`(3)，M4-1 `ZobristSufficiencyTests`(2)，M4-2 `GoldenBindingTests`(3)，辅助 `GoldenSources`/`EndgameGolden`；H4-1 整改新增 `FastTableContextTests`(4)；Phase 4 新增 `ZobristTests`(4)、`FastSearchTests`(8，含 `Oracle` 辅助)、`FastTranspositionTableTests`(3)）：`RulesTraceDifferentialTests`、`PortedRuleTests`、`GameStateBehaviourTests`（D-001/3/4、CardDb 对照 Python 等）、`SearchDifferentialTests`（评估 / 固定深度 / ID+超时 / TT key 四个）、`SearchBehaviourTests`、`SearchExceptionSafetyTests`（H-1）、`CompatTtGrowthTests`（H-2，含 30 s 的服务端等价测试）、`MoveIdentityTests`（H-3）、`AllocationTests`/`SearchAllocationTests`（0 字节）；辅助 `GoldenFiles`、`SearchGolden`。
+- Python 侧工具：`tools/parity/py_rules_trace.py`、`py_search_trace.py`、`py_endgame_trace.py`（golden 生成器，只 import 参考实现）、`tools/parity/golden_sources.py`（把 golden 绑定到源码哈希）、`tools/bench/py_endgame_bench.py`（Phase 5 benchmark）、`tools/bench/py_bench.py`（基准脚本，用法 `python tools/bench/py_bench.py <repo_root> fixed|exact|server|all`）。
 - 审查与目标文件：`docs/reviews/OPUS_PHASE3_REVIEW.md`、`.claude/phase_goal.md`（通用阶段目标）、`.claude/sonnet_review_fix_goal.md`（整改目标，已完成）。
 
 ### 12.4 构建、测试、基准、golden 数据（命令与注意事项）
 
 ```
 dotnet build csharp/TTC.Siren.sln -c Release --no-incremental        # 期望 0 warning / 0 error
-dotnet test  csharp/TTC.Siren.sln -c Release                           # 期望 62 通过 / 0 跳过，约 30 s（缓存的 golden 存在时）
+dotnet test  csharp/TTC.Siren.sln -c Release                           # 期望 78 通过 / 0 跳过，约 30 s（缓存的 golden 存在时）；golden 首次生成或源码哈希变化后重新生成约 10 分钟
 python -m pytest -q                                                    # 期望 29 passed（26 原有 + 3 个 D-002 回归）
 dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- search [runs=5]
 dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- makeundo [pairs=2000000] [runs=5]
 dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- fast [runs=5]     # Phase 4：compat TT 开 / compat TT 关（oracle）/ Fast
+dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- exact [runs=5]    # Phase 5：精确求解器
+python tools/bench/py_endgame_bench.py --out tools/bench/endgame_bench_positions.json   # 然后：Bench endgame <该文件> [runs]
 ```
 
 - **golden 数据**在 `tools/parity/golden/`（被 git 忽略）。测试发现文件缺失时会自动调用 `python tools/parity/py_*_trace.py` 生成（失败则测试失败，不跳过）。文件名：`rules_trace_g2_s20261007_n20000.jsonl.gz`（≈6 MB，≈20 s）、`search_eval_g1_s20261008_n100000.jsonl.gz`（≈20 MB，≈3 min）、`search_search_g1_s20261008_n900.jsonl.gz`、`search_id_g1_s20261008_n200.jsonl.gz`、`search_tt_g1_s20261008_n3000.jsonl.gz`、`carddb.json`；全部生成约 10 分钟，需要 `PATH` 上有 Python 3.11。目录里可能还有一个不再使用的 `search_search_g1_s20261008_n600.jsonl.gz`（旧计数，可删）。
-- **golden 失效规则**：Python 参考实现（`core/*`、`ai/ai.py`）的语义改变时，必须同时提升生成器版本（`GENERATOR_VERSION`，规则 golden 为 `py_rules_trace/2`，搜索 golden 为 `py_search_trace/1`）和 `GoldenFiles.cs` 里对应的常量/文件名里的 `g2`/`g1`；测试会校验文件头里的版本号。**但 golden 没有和参考源码内容绑定（审查 M-1）**：改了 Python 却忘了提升版本号，测试会继续对着旧数据通过。
+- **（M4-2，2026-10-08）golden 现在绑定到参考源码**：header 里的 `source_sha256` / `python_version` 与工作区不一致时，测试自动删除并重新生成该 golden（下面这条"手动提升版本"的旧规则只在 header 格式改变时才需要）。endgame golden 文件名 `endgame_<kind>_g1_s20261009_n<count>.jsonl.gz`（kind：scenario、unique、corner、reply、exact、robust、override）。
+- **golden 失效规则（旧，Phase 3/4）**：Python 参考实现（`core/*`、`ai/ai.py`）的语义改变时，必须同时提升生成器版本（`GENERATOR_VERSION`，规则 golden 为 `py_rules_trace/2`，搜索 golden 为 `py_search_trace/1`）和 `GoldenFiles.cs` 里对应的常量/文件名里的 `g2`/`g1`；测试会校验文件头里的版本号。**但 golden 没有和参考源码内容绑定（审查 M-1）**：改了 Python 却忘了提升版本号，测试会继续对着旧数据通过。
 - 基准机器噪声大：同一代码连续运行就能差 ±10%。比较前后性能必须在同一时段、同一机器、至少 3 次独立运行取中位数；单次差异不能归因于改动。
 - 开发环境陷阱（本会话踩过）：
   - PowerShell 里 `R`、`Rp` 是内置别名（`Invoke-History`、`Remove-ItemProperty`），不能用作自定义函数名（导致批量文本替换静默失败）。
@@ -858,9 +963,11 @@ dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- fast [runs=5]     
 - C# ReferenceCompat 同 22 项：43,003 节点 / ≈ 0.045–0.052 s ≈ 0.85–0.96 M NPS（≈ 60–66× 总耗时），节点数、分数位级、走法与 Python 完全相同；热路径 0 分配。open_none d4：0.0231 s（Python 1.089 s，≈ 47×）。
 - Make/Undo（Core，随机 playout，6 场景中位数均值）：≈ 6–9.5 M pairs/s；含同类规则的场景更慢（≈ 1.2–3 M）。H-3 前后：9.231 → 9.243 M（+0.1%）；search 0.0483 → 0.0486 s（+0.6%），均在噪声内。
 - 服务端等价调用 `RunIterativeDeepening(10, false, WithTime(10))`（C#，默认 TT）：open_none 10 层/15.9 M 节点/TT 7.28 M 条/512 MiB；open_same_plus 9 层/16.7 M 节点/8.25 M 条/512 MiB；mid3_ascension 10 层/30,500 节点/64 MiB；open_all_rules 7 层/10.6 M 节点/3.80 M 条/256 MiB（墙钟相关，层数会波动）。Python 同样 10 s 只完成约 5 层。
-- 还没有的：PyPy baseline（Q-6）、`_solve_endgame_exact`/robust 残局的 C# 版本（Phase 5）、任何 Fast 模式数据（Phase 4）、profiler 数据（Phase 6）。**没有数据支撑的性能结论不得写入文档。**
+- **Phase 5（2026-10-08，数据与方法见 `docs/reports/PHASE5_BENCHMARK.md`）**：robust 残局全流程 72 个局面（占用 5–8 × 未知 0/1/2）Python 8.7144 s、C# 0.07969 s（3 次中位数）≈ **109×**，72/72 选择与 Python 相同；精确求解器 end5 / mid4 / mid3_ascension：C# 0.00004 / 0.00082 / 0.0592 s，Python 0.0038 / 0.0501 / 15.58 s（≈ 95× / 61× / 263×），值相同、0 字节分配；§3.4 的 22 个固定深度项 Python 2.603 s、C# ReferenceCompat 0.0524 s（≈ 49.7×）；服务端等价调用：Python 在 10 s 内完成深度 5/5/10，C# ReferenceCompat 10/9/10，Fast 在 0.93/1.54/0.01 s 内搜完整棵树（深度 9/9/6），走法相同。
+- **（2026-10-08 更正）上面 Phase 5 的比值以 §10 的"5 更正"行和 `docs/reports/PHASE5_BENCHMARK.md` 的 Corrections 一节为准**：263× 撤回（161–167×）；49.7× 是冷 JIT（cold 53–63×，warm 119×）；robust 流水线 cold 111–112×、warm 178–189×；单一口径 "≈ 55–190×，对 CPython 3.11.4，PyPy 未测"。
+- 还没有的：PyPy baseline（Q-6，按默认只用 CPython）、profiler 数据（Phase 6）。**没有数据支撑的性能结论不得写入文档。**
 
-### 12.7 未解决的问题与待办（均不阻塞 Phase 4，除非标明）
+### 12.7 未解决的问题与待办（均不阻塞下一阶段，除非标明；Phase 5 之后的更新见 §11）
 
 **需要用户回答**
 - ~~Q-5~~ 已决定：选项 (b)（用户，2026-10-07），Phase 4 已实现并验证（§7 Phase 4）。
@@ -876,18 +983,18 @@ dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- fast [runs=5]     
 
 ### 12.8 下一步行动（按顺序）
 
-0. **（2026-10-07 复审：H4-1 RESOLVED，门禁 `PASS_TO_PHASE_5`，见 `docs/reviews/OPUS_PHASE4_REVIEW.md` §13；阻塞已解除。以下为复审前的原文，保留作记录。）** **（H4-1 已整改，等待复审；下面是整改前的原文，保留作记录）** 整改记录见 §7 "Review remediation (H4-1)"：复审者复核 H4-1 的 diff 后把门禁改为 `PASS_TO_PHASE_5`；在此之前仍然 **不得开始 Phase 5**。
-   **Phase 4 审查门禁 `BLOCK_PHASE_5`（2026-10-07，`docs/reviews/OPUS_PHASE4_REVIEW.md`）**：先执行 `/goal @.claude/sonnet_review_fix_goal.md`，只修 H4-1，然后复审。门禁改为 PASS 之前 **不得开始 Phase 5**，即使 `.claude/phase_goal.md` 按 §0 选中了 Phase 5。注意下面第 3 条中"`FastTranspositionTable` 可复用"的说法：只有在 **同一个 GameState、同一 AI 方、同一评估模式** 下复用才正确（H4-1）；不同场景的 GameState、精确残局的计分都 **不能** 与启发式搜索共用一代表项。
-1. **等待用户**：明确授权 Phase 5（可用 `/goal @.claude/phase_goal.md`，它会选中下一个未完成的阶段 = Phase 5；开始前先重读 §0 与 §7 Phase 5）。Q-4、Q-6 有默认值（§9）。
-2. （建议，不强制）Phase 5 之前：M-1 到 M-3（golden 绑定参考源码哈希；导出并比较搜索后的完整状态；把对抗性用例并入永久 golden），以及对 Phase 4 做一次独立审查。这些都是测试/工具改动，不改变搜索语义。
-3. **Phase 5 的设计约束**（来自 Phase 4 的经验）：
-   - 精确残局里终局值是 AI 视角牌数差，**不能** 用 `EvaluateState`/`EvaluateMove` 当值；`EvaluateMove` 读陈旧显示边，只能用于排序。
-   - **（H4-1，已实现的机制）Fast 表的上下文**：精确残局的评分必须在 `EvalMode` 里新增 **自己的值**（不能复用 `Heuristic`/`HeuristicAggressive`），或者使用自己的表；robust 层的每个场景 `GameState` 都是不同的状态对象，**场景之间不得共享同一代表**（`FastTranspositionTable.RequireContext` 会拒绝，需要 `clearTable:true`）。在同一个场景 `GameState`、同一个 AI 方、同一个评估模式内复用是正确的。
-   - Fast 的 `GameState.ZobristHash` 与 `FastTranspositionTable` 可复用；但 Python 的 `_endgame_state_key` 含手牌**顺序**、can_use 与 rules（§1.8）。Phase 5 的验收是 exact 值位级相等（整数牌数差），所以对 Python 的 memo 语义只需要"结果相同"，实现可以不同。
-   - 比较 Fast/compat 与 Python 的走法时，按 Q-5 (b)：比较分数与并列集合成员关系，不比较字面走法；已知 3/4,507 的 D-006 差异（§4）。
-   - 任何以性能为目的的改动都要走 CLAUDE.md §6（Baseline → Modify → Build → Test → Benchmark → Compare），不要引入未测量的 `unsafe`、SIMD、并行。
-4. Phase 5 完成后：更新本文件（状态、设计决定、测试、benchmark、已知限制、下一步），并同步本节（§12）。
-5. 后续阶段顺序见 §0/§7：Phase 6（profiler 驱动优化）→ 7（Python 服务调用 C# 引擎，需先定 Q-2）→ 8（全量服务移植）→ 9（可选 CP-SAT）。
+0. **（Phase 5 之后）** Phase 6 等待用户授权（可用 `/goal @.claude/phase_goal.md`，它会选中下一个未完成的阶段 = Phase 6；开始前先重读 §0 与 §7 Phase 6）。本节原来关于 Phase 5 的设计约束（精确评分有自己的 `EvalMode`、场景之间不共享表代、memo 键）已在 Phase 5 全部落实（§7 Phase 5）。
+1. **Phase 6 的设计约束**（来自 Phase 3–5 的经验）：
+   - 任何以性能为目的的改动都要走 CLAUDE.md §6（Baseline → Modify → Build → Test → Benchmark → Compare），一次一类改动，至少 3 次独立运行取中位数；不要引入未测量的 `unsafe`、SIMD、并行；root parallelism 需用户单独批准。
+   - 现有的性能数据与线索：Fast 与 compat 的节点数差别不大（Phase 4：0.96），速度主要来自更便宜的键与跳过 depth-1 排序；精确求解器在 `mid3_ascension`（6 个空格）上 0.059 s / 241,264 次 make_move；robust 流水线 C# 约 0.08 s / 72 个局面，其中占用 5 的局面占大头（每个局面 3–7 ms）；Phase 5 的 `Select` 为简单起见每个场景克隆一次、每个 (走法, 场景) 做一次 Make/Undo，没有测量过其中的分配与克隆成本。
+   - 零分配的热路径（Make/Undo、Evaluate、Order、AlphaBeta、TT、`ExactEndgameSolver`）必须保持，并由 `GC.GetAllocatedBytesForCurrentThread()` 测试断言。
+   - 所有 parity 测试（78 个）与 golden 必须保持不变；Python 源码变动会让 golden 自动重新生成（M4-2）。
+2. （建议，不强制）Phase 6 之前：对 Phase 5 做一次独立审查；处理 M4-3 的一部分（D-015 相关：把搜索后的手牌顺序纳入 golden）可以留到 Phase 7 之前。
+3. **Phase 7 的注意事项**（记录在这里以免遗忘，Phase 7 尚未授权）：
+   - D-015：robust 选择依赖搜索之后的手牌顺序；为了得到与 Python 相同的最终走法，标准搜索必须是 ReferenceCompat（复现 D-001），并把搜索后的 `GameState` 交给 `EndgameRobust.Select`；或者由用户决定一个规范手牌顺序。
+   - 随机回退：`ScenarioBuild.RequiresFallback` 时由 Python 侧用 `handler.generate_opponent_cards` 采样并通过 `fallbackCandidates` 传入。
+   - 请求解析（`parse_hand`/`parse_board`，含 D-011 左右互换）、未知牌采样、`ai_move` 的调度与文案仍在 Python（Phase 7）/ C#（Phase 8）。
+4. 后续阶段顺序见 §0/§7：Phase 6（profiler 驱动优化）→ 7（Python 服务调用 C# 引擎，需先定 Q-2）→ 8（全量服务移植）→ 9（可选 CP-SAT）。
 
 ---
 
