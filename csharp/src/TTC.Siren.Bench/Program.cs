@@ -22,6 +22,7 @@ using TTC.Siren.Search;
 //   TTC.Siren.Bench endgame  [positions.json] [runs=5]        Phase 5: scenario construction + robust selection vs Python
 //                            (positions and Python timings from tools/bench/py_endgame_bench.py)
 //   TTC.Siren.Bench endgame-work [positions.json]             Phase 5: make_move work of the robust pipeline (not timed)
+//   TTC.Siren.Bench loop fast|compat|exact [seconds=12]       Phase 6: one variant only, repeated for a fixed time (profiling workload)
 //
 // Machine-readable summary lines start with "RESULT " (used by tools/bench/run_interleaved.py).
 var opts = Opts.Parse(args);
@@ -40,10 +41,87 @@ else if (mode == "exact") ExactBench(db, pos, opts);
 else if (mode == "server") ServerBench(db, pos, opts);
 else if (mode == "endgame") EndgameBench(db, pos, opts);
 else if (mode == "endgame-work") EndgameWork(db, pos);
-else Console.WriteLine("usage: [--cold] [--warmup-ms n] makeundo [pairs] [runs] | search [runs] | fast [runs] | exact [runs] | server [seconds] [runs] | endgame [positions.json] [runs] | endgame-work [positions.json]");
+else if (mode == "loop") Loop(db, pos);
+else Console.WriteLine("usage: [--cold] [--warmup-ms n] makeundo [pairs] [runs] | search [runs] | fast [runs] | exact [runs] | server [seconds] [runs] | endgame [positions.json] [runs] | endgame-work [positions.json] | loop fast|compat|exact [seconds]");
 return;
 
 static string F(double v, string fmt = "R") => v.ToString(fmt, CultureInfo.InvariantCulture);
+
+// Phase 6 profiling workload: one variant only, repeated for a fixed time, so a sampling profile contains nothing else.
+static void Loop(CardDb db, string[] args)
+{
+    string variant = args.Length > 1 ? args[1] : "fast";
+    double seconds = args.Length > 2 ? double.Parse(args[2], CultureInfo.InvariantCulture) : 12.0;
+    var bodies = new List<Func<long>>();
+    if (variant == "fast")
+    {
+        // The Fast workload of the Phase 5 review profile (section 8): one table, as in Bench fast.
+        var tt = new FastTranspositionTable();
+        foreach (var (name, depth) in new[] { ("open_none", 5), ("open_all_rules", 5), ("mid3_ascension", 6), ("mid4_rev_ace", 6) })
+        {
+            string n = name;
+            int d = depth;
+            bodies.Add(() =>
+            {
+                var g = ReferenceScenarios.Create(n, db);
+                var s = new FastSearcher(g, db, tt);
+                s.RunFixedDepth(d, false, SearchLimits.Unlimited);
+                return s.Stats.NodesSearched;
+            });
+        }
+    }
+    else if (variant == "compat")
+    {
+        var tt = new CompatTranspositionTable();
+        foreach (var (name, depths) in new[] { ("open_none", new[] { 3, 4 }), ("open_same_plus", new[] { 3, 4 }), ("mid3_ascension", new[] { 4, 5 }), ("mid4_rev_ace", new[] { 4, 5 }), ("end5_same_plus", new[] { 3, 4 }) })
+        {
+            foreach (int depth in depths)
+            {
+                string n = name;
+                int d = depth;
+                bodies.Add(() =>
+                {
+                    var g = ReferenceScenarios.Create(n, db);
+                    var s = new CompatSearcher(g, db, tt);
+                    s.RunFixedDepth(d, false, SearchLimits.Unlimited);
+                    return s.Stats.NodesSearched;
+                });
+            }
+        }
+    }
+    else if (variant == "exact")
+    {
+        var memo = ExactEndgameSolver.CreateMemo(1 << 17);
+        foreach (string n in new[] { "mid3_ascension" })
+        {
+            string name = n;
+            bodies.Add(() =>
+            {
+                var g = ReferenceScenarios.Create(name, db);
+                var solver = new ExactEndgameSolver(g, memo);
+                solver.Bind(g.CurrentPlayer);
+                solver.Value(g.CurrentPlayer);
+                return solver.MakeMoves;
+            });
+        }
+    }
+    else
+    {
+        Console.WriteLine("usage: loop fast|compat|exact [seconds]");
+        return;
+    }
+
+    foreach (var body in bodies) body(); // JIT warm-up round
+    long t0 = Stopwatch.GetTimestamp();
+    long work = 0;
+    int rounds = 0;
+    while (Stopwatch.GetElapsedTime(t0).TotalSeconds < seconds)
+    {
+        foreach (var body in bodies) work += body();
+        rounds++;
+    }
+    Console.WriteLine($"loop {variant}: {rounds} rounds in {Stopwatch.GetElapsedTime(t0).TotalSeconds:F2} s, work units (nodes or make_moves) = {work:N0}");
+}
 
 static void MakeUndo(CardDb db, string[] args)
 {
@@ -59,7 +137,7 @@ static void MakeUndo(CardDb db, string[] args)
         ReferenceScenarios.RunPlayouts(g, 1, 200_000); // warm-up
 
         var times = new double[runs];
-        long alloc = 0;
+        long alloc = 0, lastChecksum = 0;
         for (int i = 0; i < runs; i++)
         {
             long a0 = GC.GetAllocatedBytesForCurrentThread();
@@ -67,6 +145,7 @@ static void MakeUndo(CardDb db, string[] args)
             long checksum = ReferenceScenarios.RunPlayouts(g, 987654321, pairs);
             times[i] = Stopwatch.GetElapsedTime(t0).TotalSeconds;
             alloc += GC.GetAllocatedBytesForCurrentThread() - a0;
+            lastChecksum = checksum;
             if (checksum == long.MinValue) Console.WriteLine(); // keep the result observable
         }
         Array.Sort(times);
@@ -74,6 +153,7 @@ static void MakeUndo(CardDb db, string[] args)
         double rate = pairs / median;
         sumRate += rate;
         Console.WriteLine($"{name,-16} {median,9:F3} {rate,18:N0} {times[0],8:F3} {times[^1],8:F3} {alloc,12}");
+        Console.WriteLine($"RESULT makeundo item={name} pairs={pairs} min_s={F(times[0])} median_s={F(median)} max_s={F(times[^1])} checksum={lastChecksum} alloc={alloc}");
     }
     Console.WriteLine($"{"mean of medians",-16} {"",9} {sumRate / ReferenceScenarios.Names.Length,18:N0}");
 }
@@ -124,6 +204,8 @@ static void Search(CardDb db, string[] args, Opts opts)
         total += time;
         string flag = time.Median < Harness.TimerLimitedSeconds ? "*" : " ";
         Console.WriteLine($"{name,-16} {depth,5} {last.Nodes,10:N0} {Harness.Us(time.Median),12}{flag}{Harness.Us(time.Min),12} {Harness.Us(time.Max),12} {last.Nodes / time.Median,13:N0} {last.ScoreBits,18:X16} {last.Alloc,8}");
+        // Deterministic part of the row (no timing): the Phase 6 invariants compare these lines before and after a change.
+        Console.WriteLine($"SIG search item={name}/{depth} nodes={last.Nodes} score={last.ScoreBits:X16} move={(last.Inst < 0 ? "none" : last.Game!.InstanceId(last.Inst) + "@" + last.Cell)} alloc={last.Alloc}");
     }
     Console.WriteLine($"{"total",-16} {"",5} {totalNodes,10:N0} {"",12} sum of per-item min {total.Min:F5} s, median {total.Median:F5} s, max {total.Max:F5} s; NPS (median) {totalNodes / total.Median:N0}");
     Console.WriteLine($"RESULT search mode={opts.Tag} nodes={totalNodes} total_min_s={F(total.Min)} total_median_s={F(total.Median)} total_max_s={F(total.Max)}");
@@ -208,6 +290,7 @@ static void Fast(CardDb db, string[] args, Opts opts)
         string Cell(Spread s) => $"{Harness.Us(s.Median)}{(s.Median < Harness.TimerLimitedSeconds ? "*" : " ")}[{Harness.Us(s.Min)}-{Harness.Us(s.Max)}]";
         string Mv(Sample s) => s.Inst < 0 ? "none" : $"{s.Game!.InstanceId(s.Inst)}@{s.Cell}";
         Console.WriteLine($"{name,-15} {depth,2} | {last[0].Nodes,10:N0} {Cell(sp[0]),26} | {last[1].Nodes,10:N0} {Cell(sp[1]),26} {last[1].Nodes / sp[1].Median,10:N0} | {last[2].Nodes,10:N0} {Cell(sp[2]),26} {last[2].Nodes / sp[2].Median,10:N0} | {(same ? "same" : "DIFF"),5} {Mv(last[1]),9} {Mv(last[2]),9} {last[2].Alloc,7}");
+        Console.WriteLine($"SIG fast item={name}/{depth} nodes={last[0].Nodes}/{last[1].Nodes}/{last[2].Nodes} score={last[0].ScoreBits:X16}/{last[1].ScoreBits:X16}/{last[2].ScoreBits:X16} move={Mv(last[0])}/{Mv(last[1])}/{Mv(last[2])} alloc={last[2].Alloc}");
         if (depth >= 4)
         {
             for (int k = 0; k < 3; k++)
