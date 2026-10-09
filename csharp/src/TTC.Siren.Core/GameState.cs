@@ -518,24 +518,18 @@ public sealed class GameState
             int inst = _cell[cell];
             if (inst >= 0 && _type[inst] != 0) counts[_type[inst]]++;
         }
-        for (int t = 1; t < CardTypes.Count; t++)
+
+        // Every card instance is on the board or in a hand, so one pass over the instance table visits exactly the cards
+        // Python visits (board cards, then both hands, once per present type). Each card is touched at most once and its
+        // new modifier depends only on its own type, so the order of the visits does not matter (the hash update is an XOR,
+        // the display refresh is per card). A first typed placement therefore still re-applies EVERY present type, including
+        // types whose count did not change (D-017 catch-up), and still refreshes their display edges (D-003).
+        for (int inst = 0; inst < _instCount; inst++)
         {
+            int t = _type[inst];
+            if (t == 0) continue;
             int count = counts[t];
-            if (count == 0) continue;
-            int modifier = ascension ? count : -count;
-            for (int cell = 0; cell < 9; cell++)
-            {
-                int inst = _cell[cell];
-                if (inst >= 0 && _type[inst] == t) ApplyTypeModifier(inst, modifier);
-            }
-            for (int p = 0; p < 2; p++)
-            {
-                for (int i = 0; i < _handCount[p]; i++)
-                {
-                    int inst = _hand[p * HandCapacity + i];
-                    if (_type[inst] == t) ApplyTypeModifier(inst, modifier);
-                }
-            }
+            if (count != 0) ApplyTypeModifier(inst, ascension ? count : -count);
         }
     }
 
