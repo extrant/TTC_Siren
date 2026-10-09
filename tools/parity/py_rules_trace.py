@@ -24,6 +24,7 @@ Usage:
   python tools/parity/py_rules_trace.py --carddb-out tools/parity/golden/carddb.json
 """
 import argparse
+import copy
 import gzip
 import json
 import os
@@ -42,7 +43,7 @@ from core.card import Card  # noqa: E402
 from core.game_state import GameState  # noqa: E402
 from core.player import Player  # noqa: E402
 
-GENERATOR_VERSION = 'py_rules_trace/3'  # 2: D-002 fixed (undo restores type_modifier by card identity); 3: header binds the source (M4-2)
+GENERATOR_VERSION = 'py_rules_trace/4'  # 2: D-002 fixed (undo restores type_modifier by card identity); 3: header binds the source (M4-2); 4: D-004 fixed, 1 record in 8 has duplicate ids in a hand
 RULE_NAMES = ['同数', '加算', '逆转', '王牌杀手', '同类强化', '同类弱化', '秩序', '混乱']
 TYPE_NAMES = ['兽人', '拂晓', '帝国', '蛮神']
 OWNER_CODE = {'red': 'r', 'blue': 'b', None: None}
@@ -159,7 +160,57 @@ class CardFactory:
         raise RuntimeError('could not draw a card with a fresh id')
 
 
-def build_position(rng, db, rules):
+DUP_EVERY = 8      # D-004 coverage: records with index % DUP_EVERY == DUP_PHASE get duplicate ids in one hand (12.5%)
+DUP_PHASE = 5
+
+
+def has_dup_share(index):
+    return index % DUP_EVERY == DUP_PHASE
+
+
+def hand_has_duplicate_ids(hand):
+    ids = [c.card_id for c in hand]
+    return len(ids) != len(set(ids))
+
+
+def add_duplicate_hand_ids(dup_rng, state, side='any', clone_unknown=False):
+    """D-004 coverage: give one hand two cards with the same card_id.
+
+    Either an identical copy of a card already in the hand (same id, edges, type and modifier: what happens when two
+    equal cards are recognised as one id), or two placeholder cards whose id is None (different edges, owner of the
+    hand). `side` is 'mover' (the player to move), 'opp' or 'any'. With clone_unknown=False only cards that are not
+    "unknown" for the endgame code (no generated/prediction mark, real id < 1000) are cloned, and None placeholders are
+    only added to the mover's hand. Hands never grow past five cards: the last card is replaced instead.
+    Returns the player index that received the duplicates, or None if nothing could be done."""
+    cur = state.current_player_idx
+    order = {'mover': [cur], 'opp': [1 - cur], 'any': [dup_rng.randint(0, 1), 0, 1]}[side]
+    for pidx in order:
+        player = state.players[pidx]
+        hand = player.hand
+        color = player.name
+        candidates = [c for c in hand if c.card_id is not None and c.card_id < 1000
+                      and not getattr(c, '_is_generated', False) and not getattr(c, '_is_prediction', False)]
+        if clone_unknown:
+            candidates = [c for c in hand if c.card_id is not None]
+        want_none = (pidx == cur or clone_unknown) and (not candidates or dup_rng.random() < 0.4)
+        if want_none:
+            while len(hand) > 3:
+                hand.pop()
+            for _ in range(2):
+                hand.append(Card(dup_rng.randint(0, 10), dup_rng.randint(0, 10), dup_rng.randint(0, 10),
+                                 dup_rng.randint(0, 10), color, None, None, dup_rng.random() < 0.85))
+            return pidx
+        if candidates:
+            src = dup_rng.choice(candidates)
+            if len(hand) >= 5:
+                hand.remove(dup_rng.choice([c for c in hand if c is not src]))
+            clone = copy.copy(src)  # a distinct object with the same id, edges, type, owner, can_use and modifier
+            hand.insert(dup_rng.randint(0, len(hand)), clone)
+            return pidx
+    return None
+
+
+def build_position(rng, db, rules, dup=False):
     typed_bias = rng.random() < 0.5
     factory = CardFactory(rng, db, rules, typed_bias)
 
@@ -200,6 +251,9 @@ def build_position(rng, db, rules):
         for c in all_cards:
             if rng.random() < 0.3:
                 c.type_modifier = rng.randint(-2, 2)  # leaves .up/.right/... stale on purpose
+    if dup:
+        # independent stream: the rest of the record is generated exactly as without duplicates
+        add_duplicate_hand_ids(random.Random(rng.random()), state, 'any', clone_unknown=True)
     return state
 
 
@@ -216,7 +270,7 @@ def rules_for_index(rng, index):
 def generate_sequence(seed, index, db):
     rng = random.Random(seed * 1_000_003 + index)
     rules = rules_for_index(rng, index)
-    state = build_position(rng, db, rules)
+    state = build_position(rng, db, rules, dup=has_dup_share(index))
 
     seq = {
         'i': index,

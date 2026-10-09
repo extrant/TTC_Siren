@@ -58,6 +58,14 @@ public sealed class EndgameDifferentialTests
 
     private static CardDb Db => SearchGolden.Db;
 
+    private static bool HasDuplicateIds(GameState g, int player)
+    {
+        for (int a = 0; a < g.HandCount(player); a++)
+            for (int b = a + 1; b < g.HandCount(player); b++)
+                if (g.InstanceId(g.HandInstance(player, a)) == g.InstanceId(g.HandInstance(player, b))) return true;
+        return false;
+    }
+
     // ------------------------------------------------------------------ scenario construction
 
     [Fact]
@@ -168,7 +176,7 @@ public sealed class EndgameDifferentialTests
     [Fact]
     public void Corner_safety_risk_matches_python_bit_for_bit()
     {
-        int records = 0, checks = 0, nonZero = 0;
+        int records = 0, checks = 0, nonZero = 0, dupRecords = 0;
         var occupancies = new int[10];
         foreach (var doc in EndgameGolden.Records("corner"))
         {
@@ -177,6 +185,7 @@ public sealed class EndgameDifferentialTests
                 var rec = doc.RootElement;
                 var g = EndgameGolden.State(rec);
                 occupancies[EndgameGolden.Occupied(g)]++;
+                if (SearchGolden.HasDuplicateHandIds(g)) dupRecords++; // D-004
                 foreach (var check in rec.GetProperty("checks").EnumerateArray())
                 {
                     var move = g.MoveFromSlot(check[0].GetInt32(), check[1].GetInt32());
@@ -188,7 +197,8 @@ public sealed class EndgameDifferentialTests
                 records++;
             }
         }
-        _output.WriteLine($"records={records}, checks={checks} (non-zero {nonZero}), occupancy 0..9: {string.Join("/", occupancies)}");
+        _output.WriteLine($"records={records}, checks={checks} (non-zero {nonZero}), occupancy 0..9: {string.Join("/", occupancies)}, records with duplicate hand ids={dupRecords}");
+        Assert.True(dupRecords * 20 >= records, "less than 5% of the corner records have duplicate hand ids");
         Assert.True(checks >= 3_000);
         Assert.True(nonZero >= 1_000);
         Assert.True(occupancies[5..9].All(c => c > 50), "occupancy 5..8 insufficiently covered");
@@ -197,12 +207,13 @@ public sealed class EndgameDifferentialTests
     [Fact]
     public void Best_immediate_reply_score_matches_python_bit_for_bit()
     {
-        int records = 0, checks = 0;
+        int records = 0, checks = 0, dupRecords = 0;
         foreach (var doc in EndgameGolden.Records("reply"))
         {
             using (doc)
             {
                 var rec = doc.RootElement;
+                if (SearchGolden.HasDuplicateHandIds(EndgameGolden.State(rec))) dupRecords++; // D-004 / D-019
                 var expected = rec.GetProperty("reply");
                 for (int ai = 0; ai < 2; ai++)
                 {
@@ -215,8 +226,9 @@ public sealed class EndgameDifferentialTests
                 records++;
             }
         }
-        _output.WriteLine($"records={records}, checks={checks}");
+        _output.WriteLine($"records={records}, checks={checks}, records with duplicate hand ids={dupRecords}");
         Assert.True(checks >= 3_000);
+        Assert.True(dupRecords * 20 >= records, "less than 5% of the reply records have duplicate hand ids");
     }
 
     [Fact]
@@ -283,7 +295,7 @@ public sealed class EndgameDifferentialTests
 
     private sealed class RobustCoverage
     {
-        public int Records, Moves, Exact, Heuristic, Aggressive, NegInf, SortedByAlias, SafePath;
+        public int Records, Moves, Exact, Heuristic, Aggressive, NegInf, SortedByAlias, SafePath, DupMover, DupScenario, DupRecords;
         public int[] Unknown = new int[4];
         public int ScenarioMin = int.MaxValue, ScenarioMax;
     }
@@ -357,6 +369,14 @@ public sealed class EndgameDifferentialTests
                     Assert.Equal(rec.GetProperty("scen").GetArrayLength(), scenarios.Count);
                 }
 
+                // D-004 / D-019 coverage: duplicate card ids in the hand of the side to move (base-state moves map to the
+                // first card of that id in a scenario) or in a scenario hand.
+                bool dupMover = SearchGolden.HasDuplicateHandIds(g) && HasDuplicateIds(g, g.CurrentPlayer);
+                bool dupScenario = scenarios.Any(sc => SearchGolden.HasDuplicateHandIds(sc));
+                if (dupMover) cov.DupMover++;
+                if (dupScenario) cov.DupScenario++;
+                if (dupMover || dupScenario) cov.DupRecords++;
+
                 string before = g.ToSnapshot().ToCanonicalString();
                 foreach (var mode in rec.GetProperty("modes").EnumerateArray())
                 {
@@ -383,7 +403,9 @@ public sealed class EndgameDifferentialTests
 
         _output.WriteLine($"[{(pythonScenarios ? "Python" : "C#")} scenarios] records={cov.Records}, move score sets compared={cov.Moves}, exact-solver selections={cov.Exact}, heuristic selections={cov.Heuristic}, " +
                           $"aggressive selections={cov.Aggressive}, -inf scores={cov.NegInf}, non-aggressive with a fully safe move={cov.SafePath}, without={cov.SortedByAlias}, " +
-                          $"unknown 0/1/2/3+: {string.Join("/", cov.Unknown)}, scenarios per record {cov.ScenarioMin}..{cov.ScenarioMax}, exact solver nodes={exactNodes:N0}");
+                          $"unknown 0/1/2/3+: {string.Join("/", cov.Unknown)}, scenarios per record {cov.ScenarioMin}..{cov.ScenarioMax}, exact solver nodes={exactNodes:N0}; " +
+                          $"D-004 duplicate hand ids: records={cov.DupRecords} (mover hand {cov.DupMover}, a scenario hand {cov.DupScenario}), selections on them={cov.DupRecords * 2}");
+        Assert.True(cov.DupRecords >= 50 && cov.DupMover >= 20 && cov.DupScenario >= 20, "records with duplicate hand ids insufficiently covered");
         Assert.True(cov.Records >= 400);
         Assert.True(cov.Exact >= 300 && cov.Heuristic >= 100, "exact and heuristic paths insufficiently covered");
         Assert.True(cov.Unknown[0] >= 30 && cov.Unknown[1] >= 50 && cov.Unknown[2] >= 50, "unknown-card counts insufficiently covered");

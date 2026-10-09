@@ -49,7 +49,7 @@ from core.card import Card  # noqa: E402
 from core.game_state import GameState  # noqa: E402
 from core.player import Player  # noqa: E402
 
-GENERATOR_VERSION = 'py_endgame_trace/1'
+GENERATOR_VERSION = 'py_endgame_trace/2'  # 2: D-004 fixed; robust/reply/corner records carry duplicate hand ids
 
 
 class _NullUi:
@@ -77,7 +77,7 @@ COLOR = ['red', 'blue']
 
 # --------------------------------------------------------------------------- positions
 
-def build_endgame_position(rng, db, rules, occupancy, unknown):
+def build_endgame_position(rng, db, rules, occupancy, unknown, dup_side=None):
     """A realistic endgame position: `occupancy` filled cells, hand sizes from the number of cards played, the side
     to move derived from who started (with some off-nominal shapes), `unknown` generated placeholder cards in the
     opponent's hand (the opponent is the side that is not to move)."""
@@ -128,6 +128,9 @@ def build_endgame_position(rng, db, rules, occupancy, unknown):
         if card.card_id in used:
             continue
         hand[slot] = card
+    if dup_side is not None:
+        # D-004 coverage (independent random stream): duplicate ids in the mover's hand or in the opponent's known cards
+        R.add_duplicate_hand_ids(random.Random(rng.random()), state, dup_side)
     return state
 
 
@@ -232,7 +235,8 @@ def unique_record(rng, db, index):
 
 def corner_record(rng, db, index):
     rules = pick_rules(rng, index)
-    state = build_endgame_position(rng, db, rules, pick_occupancy(rng, 0, 8), 0)
+    state = build_endgame_position(rng, db, rules, pick_occupancy(rng, 0, 8), 0,
+                                   dup_side='any' if R.has_dup_share(index) else None)
     cells = [(r, c) for r in range(3) for c in range(3) if state.board.is_empty(r, c)]
     hand = state.current_player.hand
     checks = []
@@ -249,7 +253,8 @@ def corner_record(rng, db, index):
 
 def reply_record(rng, db, index):
     rules = pick_rules(rng, index)
-    state = build_endgame_position(rng, db, rules, pick_occupancy(rng, 2, 8), 0)
+    state = build_endgame_position(rng, db, rules, pick_occupancy(rng, 2, 8), 0,
+                                   dup_side='any' if R.has_dup_share(index) else None)
     out = []
     for ai in (0, 1):
         probe = state.copy()
@@ -284,12 +289,20 @@ def exact_record(rng, db, index):
 
 # --------------------------------------------------------------------------- robust
 
+def robust_dup_side(index):
+    """D-004 coverage for the robust records: every 4th record (25%) has duplicate ids, alternately in the hand of the
+    side to move (base-state moves map to the first card of an id in a scenario) and in the opponent's known cards."""
+    if index % 4 != 1:
+        return None
+    return 'mover' if (index // 4) % 2 == 0 else 'opp'
+
+
 def robust_record(rng, db, index):
     for _ in range(300):
         rules = pick_rules(rng, index)
         occupancy = pick_occupancy(rng, 1, 8)
         unknown = rng.choice([0, 0, 1, 1, 2])
-        state = build_endgame_position(rng, db, rules, occupancy, unknown)
+        state = build_endgame_position(rng, db, rules, occupancy, unknown, dup_side=robust_dup_side(index))
         opp = 1 - state.current_player_idx
         opp_hand = state.players[opp].hand
         n_unknown = len(S._get_unknown_hand_indices(opp_hand))

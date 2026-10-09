@@ -109,6 +109,13 @@ public static class EndgameRobust
         int n = state.GenerateMoves(moves);
         if (n == 0) return evaluator.EvaluateState(aiPlayer, false);
 
+        // PY-QUIRK(D-019): Python copies the state for every reply and plays the FIRST card of the reply card's id in
+        // the hand as it is on entry (`next(c for c in hand if c.card_id == reply_card.card_id)`). With duplicate ids in
+        // the hand (D-004) every duplicate maps to the first card of that id. The mapping is resolved for all replies
+        // BEFORE the first Make: Make/Undo reorders the hand (D-001), and Python's copies never see that.
+        for (int i = 0; i < n; i++)
+            moves[i] = new Move(FindInHand(state, state.CurrentPlayer, state.InstanceId(moves[i].Inst)), moves[i].Cell);
+
         double best = double.PositiveInfinity;
         for (int i = 0; i < n; i++)
         {
@@ -120,6 +127,11 @@ public static class EndgameRobust
         return best != double.PositiveInfinity ? best : evaluator.EvaluateState(aiPlayer, false);
     }
 
+    /// <summary>
+    /// The first card in hand order with this card id (Python's <c>next(c for c in hand if c.card_id == card_id)</c>),
+    /// or -1. PY-QUIRK(D-019): with duplicate ids in one hand every duplicate maps to the first card of that id; this is
+    /// harmless for real data because equal ids are equal card definitions.
+    /// </summary>
     private static int FindInHand(GameState g, int player, int cardId)
     {
         for (int slot = 0; slot < g.HandCount(player); slot++)
@@ -165,6 +177,7 @@ public static class EndgameRobust
             heuristicScores[i] = new List<double>();
         }
         var safetyVotes = new int[n];
+        var mapped = new int[n];
         if (useExact) memo ??= ExactEndgameSolver.CreateMemo();
         long exactNodes = 0, exactMakes = 0;
 
@@ -180,9 +193,13 @@ public static class EndgameRobust
                 solver.Bind(aiPlayer);
             }
 
+            // PY-QUIRK(D-019): Python copies the scenario for every move and plays the first card of that id in the
+            // scenario hand as it is on entry; resolve it before the first Make reorders the hand (D-001).
+            for (int i = 0; i < n; i++) mapped[i] = FindInHand(s, s.CurrentPlayer, cardIds[i]);
+
             for (int i = 0; i < n; i++)
             {
-                int inst = FindInHand(s, s.CurrentPlayer, cardIds[i]);
+                int inst = mapped[i];
                 if (inst < 0 || !s.IsEmpty(moves[i].Cell)) continue; // Python: `continue` (no score for this scenario)
                 s.MakeMove(new Move(inst, moves[i].Cell));
                 if (useExact)

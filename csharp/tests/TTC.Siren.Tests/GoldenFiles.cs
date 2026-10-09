@@ -12,7 +12,7 @@ internal static class GoldenFiles
     public const int RulesTraceCount = 20000;
 
     /// <summary>Must equal GENERATOR_VERSION in tools/parity/py_rules_trace.py; bump both when Python semantics change.</summary>
-    public const string GeneratorVersion = "py_rules_trace/3";
+    public const string GeneratorVersion = "py_rules_trace/4";
 
     private static readonly object Gate = new();
 
@@ -27,7 +27,7 @@ internal static class GoldenFiles
     public static string GoldenDir => Path.Combine(RepoRoot, "tools", "parity", "golden");
 
     public static string RulesTracePath(int seed = RulesTraceSeed, int count = RulesTraceCount) =>
-        Path.Combine(GoldenDir, $"rules_trace_g3_s{seed}_n{count}.jsonl.gz");
+        Path.Combine(GoldenDir, $"rules_trace_g4_s{seed}_n{count}.jsonl.gz");
 
     public static string CardDbPath => Path.Combine(GoldenDir, "carddb.json");
 
@@ -45,7 +45,7 @@ internal static class GoldenFiles
     }
 
     public const int SearchSeed = 20261008;
-    public const string SearchGeneratorVersion = "py_search_trace/2";
+    public const string SearchGeneratorVersion = "py_search_trace/3";
 
     /// <summary>Record counts per kind of tools/parity/py_search_trace.py (eval: positions; search/id: positions; tt: families).</summary>
     public static int SearchCount(string kind) => kind switch
@@ -60,13 +60,13 @@ internal static class GoldenFiles
     public static string EnsureSearchGolden(string kind)
     {
         int count = SearchCount(kind);
-        string path = Path.Combine(GoldenDir, $"search_{kind}_g2_s{SearchSeed}_n{count}.jsonl.gz");
+        string path = Path.Combine(GoldenDir, $"search_{kind}_g3_s{SearchSeed}_n{count}.jsonl.gz");
         Ensure(path, $"--kind {kind} --out \"{{0}}\" --seed {SearchSeed} --count {count}", "py_search_trace.py", "search");
         return path;
     }
 
     public const int EndgameSeed = 20261009;
-    public const string EndgameGeneratorVersion = "py_endgame_trace/1";
+    public const string EndgameGeneratorVersion = "py_endgame_trace/2";
 
     /// <summary>Number of records per kind of tools/parity/py_endgame_trace.py.</summary>
     public static int EndgameCount(string kind) => kind switch
@@ -84,7 +84,7 @@ internal static class GoldenFiles
     public static string EnsureEndgameGolden(string kind)
     {
         int count = EndgameCount(kind);
-        string path = Path.Combine(GoldenDir, $"endgame_{kind}_g1_s{EndgameSeed}_n{count}.jsonl.gz");
+        string path = Path.Combine(GoldenDir, $"endgame_{kind}_g2_s{EndgameSeed}_n{count}.jsonl.gz");
         Ensure(path, $"--kind {kind} --out \"{{0}}\" --seed {EndgameSeed} --count {count}", "py_endgame_trace.py", "endgame");
         return path;
     }

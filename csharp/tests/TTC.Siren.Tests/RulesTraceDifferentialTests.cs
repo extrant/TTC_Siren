@@ -48,6 +48,7 @@ public sealed class RulesTraceDifferentialTests
         var cov = new CoverageCounters();
         var maskSeen = new int[256];
         int sequences = 0, steps = 0, makes = 0, undos = 0, seed = 0;
+        int dupSequences = 0, dupSteps = 0, dupMakes = 0;
 
         using var file = File.OpenRead(path);
         using var gz = new GZipStream(file, CompressionMode.Decompress);
@@ -79,6 +80,8 @@ public sealed class RulesTraceDifferentialTests
             CheckCounts(g, root.GetProperty("init_cw"), seed, index, "init");
 
             g.Coverage = cov;
+            bool dupSequence = SearchGolden.HasDuplicateHandIds(g); // D-004: a hand with two cards of one id
+            if (dupSequence) dupSequences++;
             int stepNo = 0;
             foreach (var step in root.GetProperty("steps").EnumerateArray())
             {
@@ -88,7 +91,9 @@ public sealed class RulesTraceDifferentialTests
                 {
                     int cell = step.GetProperty("cell").GetInt32();
                     int slot = step.GetProperty("slot").GetInt32();
-                    g.MakeMove(g.MoveFromSlot(slot, cell)); // slot resolved against the hand at this exact step
+                    var played = g.MoveFromSlot(slot, cell); // slot resolved against the hand at this exact step
+                    if (SearchGolden.SameIdInHand(g, g.CurrentPlayer, played.Inst) >= 2) dupMakes++;
+                    g.MakeMove(played);
                     int expFlips = 0;
                     foreach (var f in step.GetProperty("flips").EnumerateArray()) expFlips |= 1 << f.GetInt32();
                     Assert.True(expFlips == g.LastFlipMask,
@@ -109,12 +114,16 @@ public sealed class RulesTraceDifferentialTests
                 CheckCounts(g, step.GetProperty("cw"), seed, index, where);
                 stepNo++;
                 steps++;
+                if (dupSequence) dupSteps++;
             }
             sequences++;
         }
 
         _output.WriteLine($"seed={seed} sequences={sequences} steps={steps} (makes={makes}, undos={undos})");
         _output.WriteLine("coverage: " + cov);
+        _output.WriteLine($"D-004 duplicate hand ids: sequences={dupSequences} ({100.0 * dupSequences / sequences:F1}%), steps in them={dupSteps}, makes of a card whose id is duplicated in the hand={dupMakes}");
+        Assert.True(dupSequences * 20 >= sequences, "less than 5% of the sequences have duplicate hand ids");
+        Assert.True(dupMakes >= 200, $"only {dupMakes} makes of a duplicated-id card");
 
         Assert.True(sequences >= 20000, $"expected >= 20000 sequences, replayed {sequences}");
 

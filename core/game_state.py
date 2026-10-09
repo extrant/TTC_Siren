@@ -103,8 +103,14 @@ class GameState:
         执行移动并返回移动记录，用于后续undo
         这是新的高性能移动执行方法
         """
-        # 检查移动是否有效
-        hand_card = next((c for c in self.current_player.hand if c.card_id == card.card_id), None)
+        # 检查移动是否有效。
+        # 先按对象身份在手牌中查找，找不到才退回按 card_id 匹配（调用方可能传入 copy()）。
+        # 只按 card_id 匹配时，同一手牌里有重复 id（两张同 id 的卡、或两张 None）会移除第一张同 id 的卡，
+        # 而放到棋盘上的却是传入的那张，undo 之后出现重复引用并丢失原卡（D-004，已修复）。
+        hand = self.current_player.hand
+        hand_card = next((c for c in hand if c is card), None)
+        if hand_card is None:
+            hand_card = next((c for c in hand if c.card_id == card.card_id), None)
         if not self.board.is_empty(row, col) or not hand_card:
             return None
         

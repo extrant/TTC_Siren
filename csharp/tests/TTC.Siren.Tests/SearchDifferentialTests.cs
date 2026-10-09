@@ -16,7 +16,7 @@ public sealed class SearchDifferentialTests
     public void Evaluate_state_and_evaluate_move_match_python_bit_for_bit()
     {
         string path = GoldenFiles.EnsureSearchGolden("eval");
-        int positions = 0, stateChecks = 0, moveChecks = 0, withHistory = 0;
+        int positions = 0, stateChecks = 0, moveChecks = 0, withHistory = 0, dupPositions = 0;
         var phases = new int[3];
 
         foreach (var doc in SearchGolden.Records(path, "eval"))
@@ -30,6 +30,7 @@ public sealed class SearchDifferentialTests
                 foreach (var h in rec.GetProperty("hist").EnumerateArray())
                     history.SetById(h[0].ValueKind == JsonValueKind.Null ? -1 : h[0].GetInt32(), h[1].GetInt32(), h[2].GetInt32(), h[3].GetInt32());
                 if (rec.GetProperty("hist").GetArrayLength() > 0) withHistory++;
+                if (SearchGolden.HasDuplicateHandIds(g)) dupPositions++; // D-004
 
                 int occupied = System.Numerics.BitOperations.PopCount(g.OccupiedMask);
                 phases[occupied <= 2 ? 0 : occupied <= 5 ? 1 : 2]++;
@@ -55,8 +56,10 @@ public sealed class SearchDifferentialTests
         }
 
         _output.WriteLine($"positions={positions} evaluate_state checks={stateChecks} evaluate_move checks={moveChecks} " +
-                          $"positions with history={withHistory} occupancy phases (<=2, 3..5, >=6)={phases[0]}/{phases[1]}/{phases[2]}");
+                          $"positions with history={withHistory} occupancy phases (<=2, 3..5, >=6)={phases[0]}/{phases[1]}/{phases[2]} " +
+                          $"positions with duplicate hand ids (D-004)={dupPositions}");
         Assert.True(positions >= 100_000, $"only {positions} positions");
+        Assert.True(dupPositions * 20 >= positions, "less than 5% of the positions have duplicate hand ids");
         Assert.True(phases.All(p => p > 5_000), "aggressive phases insufficiently covered");
     }
 
@@ -65,7 +68,7 @@ public sealed class SearchDifferentialTests
     {
         string path = GoldenFiles.EnsureSearchGolden("search");
         var tt = new CompatTranspositionTable();
-        int positions = 0, runs = 0, benchItems = 0, aggressiveRuns = 0, endgameToTerminal = 0;
+        int positions = 0, runs = 0, benchItems = 0, aggressiveRuns = 0, endgameToTerminal = 0, dupPositions = 0, dupRuns = 0;
         long nodes = 0;
         var depthSeen = new int[8];
 
@@ -76,9 +79,12 @@ public sealed class SearchDifferentialTests
                 var rec = doc.RootElement;
                 bool aggressive = rec.GetProperty("aggr").GetBoolean();
                 bool isBench = rec.TryGetProperty("name", out _);
+                bool dup = false;
                 foreach (var run in rec.GetProperty("runs").EnumerateArray())
                 {
                     var g = SearchGolden.BuildState(rec, out string label);
+                    dup = SearchGolden.HasDuplicateHandIds(g);
+                    if (dup) dupRuns++; // D-004
                     int depth = run.GetProperty("d").GetInt32();
                     int empties = 9 - System.Numerics.BitOperations.PopCount(g.OccupiedMask);
                     string ctx = $"{label} depth={depth} aggressive={aggressive}";
@@ -106,11 +112,14 @@ public sealed class SearchDifferentialTests
                     if (depth >= empties) endgameToTerminal++;
                 }
                 if (isBench) benchItems += rec.GetProperty("runs").GetArrayLength(); else positions++;
+                if (dup && !isBench) dupPositions++;
             }
         }
 
         _output.WriteLine($"positions={positions} runs={runs} (aggressive {aggressiveRuns}, searched to terminal {endgameToTerminal}) " +
-                          $"nodes={nodes:N0} benchmark items={benchItems} runs per depth 1..5={string.Join('/', depthSeen[1..6])}");
+                          $"nodes={nodes:N0} benchmark items={benchItems} runs per depth 1..5={string.Join('/', depthSeen[1..6])} " +
+                          $"positions with duplicate hand ids (D-004)={dupPositions}, runs on them={dupRuns}");
+        Assert.True(dupPositions * 20 >= positions, "less than 5% of the positions have duplicate hand ids");
         Assert.True(positions >= 500, $"only {positions} positions");
         Assert.Equal(22, benchItems); // section 3.4 of CSHARP_MIGRATION.md
         for (int d = 1; d <= 5; d++) Assert.True(depthSeen[d] >= 500, $"depth {d}: only {depthSeen[d]} runs");
@@ -122,7 +131,7 @@ public sealed class SearchDifferentialTests
     {
         string path = GoldenFiles.EnsureSearchGolden("id");
         var tt = new CompatTranspositionTable();
-        int positions = 0, unlimitedRuns = 0, budgetRuns = 0, directBudget = 0, discardedLevels = 0, rootNone = 0;
+        int positions = 0, unlimitedRuns = 0, budgetRuns = 0, directBudget = 0, discardedLevels = 0, rootNone = 0, dupPositions = 0;
 
         foreach (var doc in SearchGolden.Records(path, "id"))
         {
@@ -185,10 +194,16 @@ public sealed class SearchDifferentialTests
                     Assert.Equal(SearchGolden.HistoryText(direct.GetProperty("hist")), SearchGolden.HistoryText(searcher.History));
                     directBudget++;
                 }
-                if (!rec.TryGetProperty("name", out _)) positions++;
+                if (!rec.TryGetProperty("name", out _))
+                {
+                    positions++;
+                    if (SearchGolden.HasDuplicateHandIds(SearchGolden.BuildState(rec, out _))) dupPositions++; // D-004
+                }
             }
         }
 
+        _output.WriteLine($"D-004 positions with duplicate hand ids={dupPositions}");
+        Assert.True(dupPositions * 20 >= positions, "less than 5% of the positions have duplicate hand ids");
         _output.WriteLine($"positions={positions} unlimited ID runs={unlimitedRuns} node-budget ID runs={budgetRuns} (interrupted before maxDepth: {discardedLevels}) " +
                           $"direct minimax with budget={directBudget} root move None={rootNone}");
         Assert.True(positions >= 200);

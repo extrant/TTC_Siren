@@ -5,7 +5,7 @@
 > 任何 Phase 完成后必须更新本文件。
 >
 > **新会话快速上手：先读 `CLAUDE.md`，再读本文件 §12「会话交接」（当前状态、如何构建/测试、用户已做的决定、未解决问题、下一步），然后按需读 §0 与 §7。**
-> 当前一句话状态：Phase 1–5 完成（Phase 5 于 2026-10-08 完成，验收见 §7 Phase 5；M4-1/M4-2 已先行解决）；Phase 6 **未开始**，等待用户明确授权；工作在分支 `csharp-solver-migration`（Phase 1–4 已推送，HEAD `710a70e`；**Phase 5 的改动尚未提交、未推送**，按 CLAUDE.md §8 没有用户要求不提交；**没有**对 `main` 的 PR——PR #1 已按用户要求关闭）。
+> 当前一句话状态：Phase 1–5 完成（Phase 5 于 2026-10-08 完成，验收见 §7 Phase 5；M4-1/M4-2 已先行解决）；Phase 6 已获授权并进行中（2026-10-09，`.claude/phase6_goal.md`：A 提交并推送 Phase 5 → B D-004 双边修复 → C 性能优化）；工作在分支 `csharp-solver-migration`（Phase 5 已提交并推送到 `b6e4ea4`；B、C 的提交只在本地，未推送；**没有**对 `main` 的 PR——PR #1 已按用户要求关闭）。
 
 ---
 
@@ -330,7 +330,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | D-001 | undo 把卡 `append` 到手牌末尾 → make+undo 后手牌顺序改变（实测 `[56,64,27,46,7]` → 打出 64 再撤销 → `[56,27,46,7,64]`） | 走法生成顺序 → 稳定排序中并列走法的先后 → best move 选择 / cutoff / 节点数 / history | C# 复现（有序手牌 + 移除下标 + 追加） | OPEN-EMULATE |
 | D-002 | （**已修复**）原行为：同类规则下，undo 按 **快照时的手牌下标** 恢复 `type_modifier`，但手牌已重排 → 修正值写到错误的卡上（Phase 1 实测：拂晓卡 46 从 +1 变 0，帝国卡 31 从 0 变 +1）。无类型卡也可能被写入非零修正且永远不会被重算。**修复**：make 时按卡牌对象（C# 按卡实例）保存 `type_modifier`，undo 时按身份写回；D-001（undo 追加到手牌末尾）和 D-003（显示边不恢复）**不变**。回归测试：Python `tests/test_undo_type_modifiers.py`（3 个，旧代码上全部失败）、C# `D002_fixed_undo_restores_modifiers_by_card_identity` + 全量 differential（golden generator `py_rules_trace/2`） | 修复前：改变规则结算结果；修复后：同类规则下搜索结果不再依赖访问顺序 | 两边同时修复（用户在 Phase 2 之后批准 Q-1，2026-10-07） | **FIXED-BOTH**
 | D-003 | 显示值 `.up/.right/.down/.left` 只在 `apply_type_modifier` 中更新，undo 不恢复；全 0 卡的显示值为 0，而有效值为 1 | `evaluate_move` 的吃子差值、星级特例，以及 `_score_unknown_candidate` 读取的是陈旧值 → 影响排序 | C# 为每个卡实例保存 4 字节 DisplayEdges 并完全复现（开销很小） | OPEN-EMULATE |
-| D-004 | 同一手牌里有重复 `card_id`（例如两个 None 占位牌、四边相同的两张牌被识别成同一 id、预测牌重复）时，`make_move` 移除的是第一张同 id 的卡，放到棋盘上的却是传入的那张 → undo 后出现重复引用、原卡丢失（实测） | 状态损坏 | C# 按手牌槽位身份处理；遇到重复 id 输入时报告并在 parity 中排除；是否在 Python 侧修复由用户决定 | **DECISION**（Q-2）→ **用户决定（2026-10-09）：Python 与 C# 都修复**（Python `make_move` 先按对象身份找手牌、找不到再按 card_id；C# 接受重复 id；见 `.claude/phase6_goal.md` 步骤 B；完成并复审后改为 FIXED-BOTH） |
+| D-004 | （**已修复**）原行为：同一手牌里有重复 `card_id`（两个 None 占位牌、四边相同的两张牌被识别成同一 id、预测牌重复）时，`make_move` 移除的是第一张同 id 的卡，放到棋盘上的却是传入的那张 → undo 后出现重复引用、原卡丢失（Phase 1 实测）。**修复**（用户批准 Q-2，2026-10-09）：Python `make_move` 先按对象身份在手牌里找（`c is card`），找不到才退回按 `card_id` 匹配（`count_captured_cards` 传入 `card.copy()`，仍走回退）；`undo_move` 不变（D-001、D-003 保持）。C#：`GameState.FromSnapshot` 不再拒绝重复 id（每个卡实例本来就有自己的身份，`Move(Inst, Cell)`、哈希、undo 无需改动）。回归测试：Python `tests/test_duplicate_hand_ids.py`（5 个；其中 3 个在旧代码上失败：同 id 两张的第二张、两张 None、300 个固定种子的随机 make/undo 往返），C# `Duplicate_hand_ids_are_supported`（取代 `D004_duplicate_hand_ids_are_rejected`，后者断言的正是被批准改变的行为）+ 全量 differential（golden 现含重复 id，见 §7 "D-004 修复记录"） | 修复前：状态损坏；修复后：重复 id 的手牌是合法输入 | 两边同时修复 | **FIXED-BOTH** |
 | D-005 | TT key 中手牌 id 无分隔符拼接：`[1,23]` 与 `[12,3]` 的 key 相同（实测碰撞） | 罕见的错误 TT 命中 | ReferenceCompat 模式复现；**Fast 模式已改用 Zobrist（Phase 4，无此问题）** | OPEN-EMULATE（compat；Fast 不继承） |
 | D-006 | TT 不存 bound 类型；cutoff/超时后的部分结果也按精确值存储，命中条件只看深度 | 理论上不正确。§3.7 的 4 个样本中未观察到影响；**Phase 4 在 4,507 次固定深度运行中实测：3 次（0.07%）Python（TT 开）的根分数 ≠ 精确 minimax 值，且 Python 的走法不在精确并列集合内**（`i=186 d5`、`i=383 d5 激进`、`i=397 d4`，见 §7 Phase 4 的 Q-5 报告；ReferenceCompat 与 Python 一致，所以这三次是 TT 语义造成的，D-005 碰撞与 D-006 无 bound 在此未分开归因） | ReferenceCompat 复现；**Fast 模式使用 exact/lower/upper，只在同深度复用，不存被中断节点（Phase 4 已实现并验证）** | OPEN-EMULATE（compat；Fast 不继承） |
 | D-007 | 终局（棋盘满）仍用启发式 `evaluate_state`，没有胜负大分 | 搜索可能偏好"启发式分高但输掉"的线 | 不改，复现 | OPEN-EMULATE |
@@ -345,6 +345,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | D-016 | `_evaluate_endgame_move_robustly` 的"非精确"分支（一步回应 + 角落提前返回）在生产中不可达：进入 robust 模式要求占用 ≥ 5，`use_exact_solver` 与 corner 风险读同一块棋盘（占用 ≥ 5 才非零），所以"非精确且 corner_risk ≥ 5"永远为假 | 无（死代码） | C# 忠实复现并以 PY-QUIRK 标注；golden 覆盖非精确路径并断言该路径 corner 风险恒为 0 | OPEN-EMULATE |
 | D-017 | `_copy_state_with_unknown_assignment` 的替换牌 `type_modifier` = 0 且不重算同类修正，含同类规则时场景里的未知牌没有强化/弱化，直到有类型的牌被打出触发重算 | 场景内的精确值 | 复现；golden 逐条验证 | OPEN-EMULATE |
 | D-018 | `select_endgame_robust_move` 在激进模式总是、非激进模式在没有安全走法时 **原地排序** `scored_moves`（别名副作用），返回列表的顺序依分支而异 | 只影响返回列表的顺序 | 复现；golden 逐条比较顺序 | OPEN-EMULATE |
+| D-019 | 机器人层（`_best_immediate_reply_score`、`_evaluate_endgame_move_robustly`）把每个走法的牌按 **card_id 取手牌里的第一张**（`next(c for c in hand if c.card_id == card.card_id)`），而不是按身份。手牌里有重复 id（D-004）时，所有重复都映射到该 id 的第一张卡；对真实数据无害，因为同 id = 同一张卡的定义，但对 None 占位牌（四边可以不同）会改变被评估的走法集合 | 只在手牌内有重复 id 时；golden 有 71 条 robust 记录（走子方手牌 50 条、场景手牌 71 条）与 187 条 reply 记录覆盖 | C# 复现：在入口处（Make/Undo 重排手牌之前）按手牌顺序解析"第一张同 id"（Python 每次都从 `copy()` 开始，看不到 D-001 的重排），变异检查：去掉映射 → reply 测试在记录 #5 失败；改成每次迭代重新解析 → robust 测试在记录 #17 失败 | OPEN-EMULATE |
 
 ---
 
@@ -460,7 +461,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 3. **没有实现 `EffEdges`（clamp 缓存）**：有效值 `clamp(base+mod,1,10)` 现场计算（一次加法 + 两次比较）。没有 benchmark 数据证明需要缓存，按 CLAUDE.md §6 不做；Phase 6 若 profiler 指向它再评估。
 4. 实例表容量 `MaxInstances = 19`（棋盘 9 + 手牌 2×5），手牌容量 5，undo 深度 16（≥ 9 个空格）。
 5. `MakeMove` 对非法走法（手牌下标/格子越界、格子已占用）抛 `InvalidOperationException`（Python 返回 `None`）。搜索只会传入 `GenerateMoves` 生成的走法。
-6. D-004：`FromSnapshot` 发现同一手牌内 `card_id` 重复（包括两个 `None`）时抛 `InvalidGameStateException`；golden 生成器保证手牌内 id 唯一（最多一张 `None` id）。
+6. D-004：`FromSnapshot` 发现同一手牌内 `card_id` 重复（包括两个 `None`）时抛 `InvalidGameStateException`；golden 生成器保证手牌内 id 唯一（最多一张 `None` id）。**（已被 Q-2 取代：D-004 在两边修复，C# 现在接受重复 id，见 §7 "D-004 修复记录"。）**
 7. 同数/加算/基础翻面的"插入顺序"（基础→加算→同数；dict 保序语义）被逐项复现，包括"同数/加算 reason 不会被后续改写、基础可被覆盖"。最终状态本来与顺序无关（§1.5），但 `LastFlipMask` 与 Python 的 `record.flipped_cards` 集合在 182,910 步中全部一致。
 8. 同类强化/弱化的修正值快照**按卡实例**保存（`_snapshot[depth * MaxInstances + inst]`，覆盖全部实例），undo 按实例写回——这是 **D-002 修复后**的语义（Phase 2 首次交付时曾按 Python 旧的下标 key 语义复现 D-002，Q-1 批准后改为修复，见下方"D-002 修复记录"）；显示边 `_display` 作为每实例 4 字节状态保存，仅在 `ApplyTypeModifier` 中更新，undo 不恢复（D-003）。代码中以 `// PY-QUIRK(D-001/003/004/013)` 标注（D-002 已修复，代码注释为 `D-002 (FIXED-BOTH)`）。
 9. 统计覆盖率用可选的 `GameState.Coverage`（搜索路径上为 `null`，开销为一次 null 判断）。
@@ -735,6 +736,15 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 - 详细数字、可信范围与全部声明见 `docs/reports/PHASE5_BENCHMARK.md` 的 "Corrections after the Opus benchmark review" 一节与 §10。Phase 6 未开始。
 
 - **A-7（CPU 核心放置，2026-10-08，评审 §12.4）**：混合 CPU 上 P/E 核放置会让同一运行相差 1.3–2×，已加 `tools/bench/pin.py` 与 `run_interleaved.py --affinity`（两边都固定在同一 CPU 集，默认检测 P 核集，本机 `0xFFF`），harness 表头打印实际亲和性；可信比值现在都是"两边固定在 P 核"的值（fixed warm 116–118×、exact 161–162×、robust warm 169–175×），记录见 §10 与报告的 "A-7" 一节。**暂定，待用户确认（用户对"中位数还是范围"只回复了"继续"，没有给出选择；助手按最保守的方式处理，这不等于用户批准了某个数字，可一句话改动）**：fixed cold 的 11 轮比值 57.5–91.0×（中位数 70.1×），个别轮超出评审的 55–73× 范围 15% 以上；口径是**同时写出完整范围与中位数**——"57–91×（中位数 70×）"——而不是单个数字。Phase 6 未开始。
+
+#### D-004 修复记录（Q-2，2026-10-09，用户批准；`.claude/phase6_goal.md` 步骤 B）
+
+- **Python**（唯一改动的 Python 业务文件 `core/game_state.py`，+8/−2）：`make_move` 先 `next((c for c in hand if c is card), None)`，找不到才退回旧的按 `card_id` 匹配。所有现有调用者的行为不变（搜索传入的是手牌里的对象；robust 层传入手牌里的"第一张同 id"，身份能找到；`count_captured_cards` 传入 `card.copy()`，走回退）。`undo_move` 未改（D-001、D-003 保持）。
+- **C#**：`GameState.FromSnapshot` 去掉重复 id 的拒绝并更新 PY-QUIRK 注释；`MakeMove`/`UndoMove`、哈希（按实例）、`Move(Inst, Cell)` 无需改动。检查过：`HistoryTable`（按 id，重复共享条目，与 Python 相同）、`PythonStateKey`（id 拼接，与 Python 相同）、Zobrist（按实例）、残局代码。**D-019**：`EndgameRobust.BestImmediateReplyScore` 与 `Select` 现在在入口处（任何 Make/Undo 之前）把每个走法映射到手牌里"该 id 的第一张"，与 Python 的 `next(c for c in hand if c.card_id == …)`（每次从 `copy()` 开始）一致。
+- **测试**：Python `tests/test_duplicate_hand_ids.py`（5 个）——**在旧代码上 3 个失败**（第二张同 id 卡被放置和移除、两张 None 按身份区分、300 个固定种子的随机 make/undo 往返不丢卡不重复），另外 2 个守住不变的行为（`copy()` 回退、不在手牌且 id 不匹配时返回 `None`），新代码上 5 个全过；`pytest` 现为 **34 passed**（29 + 5）。C#：`D004_duplicate_hand_ids_are_rejected` 被 `Duplicate_hand_ids_are_supported` 取代（**理由**：旧测试断言的正是 Q-2 批准要改变的行为；CLAUDE.md §7 允许断言本身被证明过时时替换并记录原因）——新测试覆盖状态往返、按实例 make/undo（第二张同 id 卡落到棋盘、剩下的是 1-2-3-4 那张、undo 追加到末尾 D-001）、200 条随机游走中增量 Zobrist 哈希 = 重算值且完全撤销后哈希复原、depth 1–4 两种模式下 Fast 根分数与 oracle 位级相等、ReferenceCompat 在克隆上节点数与分数确定。其他测试没有跳过、删除或放宽。
+- **golden**：生成器版本升级（`py_rules_trace/4`、`py_search_trace/3`、`py_endgame_trace/2`），源码哈希绑定（M4-2）使旧 golden 自动作废并重新生成。重复 id 用独立的随机流加入（不改变其余记录的内容）：规则轨迹每 8 条中 1 条，搜索 eval/search/id/tt 同样，endgame 的 robust 每 4 条 1 条（交替放在走子方手牌和对手已知牌里）、reply 与 corner 每 8 条 1 条；重复形式 = 同 id 同边的复制品，或两张 id 为 None 的占位牌（边不同）。C# 差异测试统计并断言覆盖：规则轨迹 **2,500 条序列（12.5%）、23,100 步、3,314 次对"手牌里 id 重复的卡"的 make**；eval **12,500 / 100,000** 个局面；固定深度搜索 **112 个局面、557 次运行**；ID 25 个局面；robust **71 条记录**（走子方手牌 50、场景手牌 71，各 2 种模式 = 142 次选择，Python 场景与 C# 场景各跑一遍）；reply 与 corner 各 187 / 1,500 条。全部 78 个 C# 测试在重新生成的 golden 上通过（0 失败、0 跳过），0 个不一致。
+- **变异检查**（改一处，对应测试必须失败，之后已还原）：去掉 `BestImmediateReplyScore` 的入口映射 → reply 测试失败；`Select` 改为每次迭代重新解析"第一张同 id" → 两个 robust 测试失败（记录 #17，返回顺序不同）。
+- **D-004 → FIXED-BOTH，新增 D-019（OPEN-EMULATE）**。已知限制：exact 记录和 scenario 记录没有加入重复 id（Python 的 exact 生成器本来就按 id 取第一张，C# exact 测试按槽位走，两者对"边不同的同 id 卡"并不等价；真实数据里同 id 的卡定义相同，不受影响）。
 
 ### Phase 6 — Profiler 驱动优化
 

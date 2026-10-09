@@ -1,5 +1,6 @@
 using System.Text.Json;
 using TTC.Siren.Core;
+using TTC.Siren.Search;
 
 namespace TTC.Siren.Tests;
 
@@ -78,18 +79,92 @@ public sealed class GameStateBehaviourTests
         Assert.Equal(0, g.InstanceModifier(inst));
     }
 
+    /// <summary>
+    /// D-004 (FIXED-BOTH, replaces <c>D004_duplicate_hand_ids_are_rejected</c>, which asserted the old behaviour: Python
+    /// corrupted the state when a hand held two cards with one id, so C# rejected such input. Python now plays the card
+    /// that is passed (object identity first), so such hands are legal and every duplicate keeps its own identity).
+    /// </summary>
     [Fact]
-    public void D004_duplicate_hand_ids_are_rejected()
+    public void Duplicate_hand_ids_are_supported()
     {
-        var s = new StateSnapshot { Current = 0, Rules = RuleSet.None };
-        s.Hands[0].Add(C(1, 1, 1, 1, R, 7));
-        s.Hands[0].Add(C(2, 2, 2, 2, R, 7));
-        Assert.Throws<InvalidGameStateException>(() => GameState.FromSnapshot(s));
+        var board = new CardSnapshot?[9];
+        board[0] = C(5, 5, 5, 5, B, 40, "拂晓");
+        board[8] = C(3, 6, 2, 4, R, 52, "帝国");
+        var red = new[]
+        {
+            C(1, 2, 3, 4, R, 7, "拂晓"), C(5, 6, 7, 8, R, 7, "拂晓"), // same id, different edges: identity matters
+            C(0, 0, 0, 0, R, -1), C(3, 3, 3, 3, R, -1),                // two None placeholders
+            C(9, 2, 4, 6, R, 9, "帝国"),
+        };
+        var blue = new[] { C(4, 4, 4, 4, B, 21), C(4, 4, 4, 4, B, 21), C(6, 1, 8, 2, B, 23, "拂晓") };
+        var rules = RuleSet.Same | RuleSet.Plus | RuleSet.Ascension;
+        var g = Make(0, rules, board, red, blue);
 
-        var none = new StateSnapshot { Current = 0, Rules = RuleSet.None };
-        none.Hands[1].Add(C(0, 0, 0, 0, B, -1));
-        none.Hands[1].Add(C(0, 0, 0, 0, B, -1));
-        Assert.Throws<InvalidGameStateException>(() => GameState.FromSnapshot(none));
+        // 1. state round trip keeps both duplicates, their order and every field
+        Assert.Equal(new[] { 7, 7, -1, -1, 9 }, HandIds(g, 0));
+        Assert.Equal(new[] { 21, 21, 23 }, HandIds(g, 1));
+        string canonical = g.ToSnapshot().ToCanonicalString();
+        Assert.Equal(canonical, GameState.FromSnapshot(g.ToSnapshot()).ToSnapshot().ToCanonicalString());
+        ulong hash0 = g.ZobristHash;
+        Assert.Equal(hash0, g.ComputeZobristHash());
+
+        // 2. make / undo by instance: the SECOND id-7 card is the one that lands on the board and leaves the hand
+        int second = g.HandInstance(0, 1);
+        int first = g.HandInstance(0, 0);
+        g.MakeMove(g.MoveFromSlot(1, 4));
+        Assert.Equal(second, g.BoardInstance(4));
+        Assert.Equal(new[] { first, g.HandInstance(0, 1), g.HandInstance(0, 2), g.HandInstance(0, 3) },
+            Enumerable.Range(0, 4).Select(k => g.HandInstance(0, k)).ToArray());
+        Assert.Equal(7, g.InstanceId(g.HandInstance(0, 0)));
+        Assert.Equal(1, g.InstanceBase(g.HandInstance(0, 0), (int)Side.Up)); // the remaining id-7 card is the 1-2-3-4 card
+        Assert.Equal(g.ZobristHash, g.ComputeZobristHash());
+        g.UndoMove();
+        Assert.Equal(5, g.HandCount(0));
+        Assert.Equal(new[] { first, g.HandInstance(0, 1), g.HandInstance(0, 2), g.HandInstance(0, 3), second },
+            Enumerable.Range(0, 5).Select(k => g.HandInstance(0, k)).ToArray()); // D-001: the played card is appended
+        Assert.Equal(hash0, g.ZobristHash);
+
+        // 3. a seeded random walk over both hands keeps the incremental hash equal to the recomputed one and
+        //    restores every card (no duplicate reference, no lost card)
+        var rng = new Random(20261009);
+        Span<Move> moves = stackalloc Move[GameState.MaxMoves];
+        for (int walk = 0; walk < 200; walk++)
+        {
+            int depth = 0;
+            while (depth < 7)
+            {
+                int n = g.GenerateMoves(moves);
+                if (n == 0 || g.IsGameOver) break;
+                g.MakeMove(moves[rng.Next(n)]);
+                depth++;
+                Assert.True(g.ZobristHash == g.ComputeZobristHash(), $"walk {walk} depth {depth}: incremental hash differs");
+            }
+            while (depth-- > 0) g.UndoMove();
+            Assert.True(hash0 == g.ZobristHash, $"walk {walk}: hash not restored");
+            Assert.Equal(5, g.HandCount(0));
+            Assert.Equal(3, g.HandCount(1));
+            Assert.Equal(5, Enumerable.Range(0, 5).Select(k => g.HandInstance(0, k)).Distinct().Count());
+        }
+
+        // 4. search on such a state: Fast equals the oracle bit for bit, and ReferenceCompat is deterministic on a clone
+        foreach (bool aggressive in new[] { false, true })
+        {
+            for (int depth = 1; depth <= 4; depth++)
+            {
+                var oracle = Oracle.Exact(GameState.FromSnapshot(g.ToSnapshot()), depth, aggressive);
+                var gf = GameState.FromSnapshot(g.ToSnapshot());
+                var fast = new FastSearcher(gf, SearchGolden.Db, new FastTranspositionTable(1 << 14))
+                    .RunFixedDepth(depth, aggressive, SearchLimits.Unlimited);
+                Assert.Equal(BitConverter.DoubleToInt64Bits(oracle.Score), BitConverter.DoubleToInt64Bits(fast.Score));
+
+                var ca = new CompatSearcher(GameState.FromSnapshot(g.ToSnapshot()), SearchGolden.Db, new CompatTranspositionTable(1 << 12));
+                var cb = new CompatSearcher(GameState.FromSnapshot(g.ToSnapshot()), SearchGolden.Db, new CompatTranspositionTable(1 << 12));
+                var a = ca.RunFixedDepth(depth, aggressive, SearchLimits.Unlimited);
+                var b = cb.RunFixedDepth(depth, aggressive, SearchLimits.Unlimited);
+                Assert.Equal(ca.Stats.NodesSearched, cb.Stats.NodesSearched);
+                Assert.Equal(BitConverter.DoubleToInt64Bits(a.Score), BitConverter.DoubleToInt64Bits(b.Score));
+            }
+        }
     }
 
     [Fact]

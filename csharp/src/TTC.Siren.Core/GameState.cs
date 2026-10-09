@@ -194,13 +194,10 @@ public sealed class GameState
                 throw new InvalidGameStateException($"Hand {p} has {hand.Count} cards (capacity {HandCapacity})");
             for (int i = 0; i < hand.Count; i++)
             {
-                // PY-QUIRK(D-004): Python's make_move locates the hand card by card_id and corrupts the state when
-                // two cards of one hand share an id (including two None ids). Such input is rejected, not emulated.
-                for (int j = 0; j < i; j++)
-                {
-                    if (hand[j].Id == hand[i].Id)
-                        throw new InvalidGameStateException($"Hand {p} contains duplicate card id {hand[i].Id} (D-004)");
-                }
+                // D-004 (FIXED-BOTH): two cards of one hand may share a card id (identical copies of a real card, or two
+                // None placeholders). Python's make_move now removes the hand card that is played (object identity first,
+                // card_id only as a fallback for copies), and every C# card instance has its own identity, so such
+                // hands are legal input. History and the Python TT key are keyed by id, as in Python.
                 int inst = g.AddInstance(hand[i]);
                 g._hand[p * HandCapacity + i] = (byte)inst;
             }

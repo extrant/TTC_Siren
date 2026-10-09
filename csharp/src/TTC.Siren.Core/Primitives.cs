@@ -169,7 +169,7 @@ public static class CardTypes
     }
 }
 
-/// <summary>Thrown when an input state cannot be represented faithfully (for example D-004 duplicate hand ids).</summary>
+/// <summary>Thrown when an input state cannot be represented faithfully (for example a hand over capacity or an invalid owner).</summary>
 public sealed class InvalidGameStateException : Exception
 {
     public InvalidGameStateException(string message) : base(message) { }

@@ -45,7 +45,7 @@ from core.player import Player  # noqa: E402
 import py_rules_trace as R  # noqa: E402
 import golden_sources as GS  # noqa: E402
 
-GENERATOR_VERSION = 'py_search_trace/2'  # 2: header binds the source (M4-2)
+GENERATOR_VERSION = 'py_search_trace/3'  # 2: header binds the source (M4-2); 3: D-004 fixed, 1 record in 8 has duplicate ids in a hand
 INF = float('inf')
 
 
@@ -86,7 +86,7 @@ def make_position(rng, db, index, empties_bias):
     """Random position (shared builder). empties_bias='late' favours boards with <= 5 empty cells."""
     rules = R.rules_for_index(rng, index)
     for _ in range(100):
-        state = R.build_position(rng, db, rules)
+        state = R.build_position(rng, db, rules, dup=R.has_dup_share(index))
         occ = occupancy(state)
         if empties_bias == 'late' and occ < 4:
             continue

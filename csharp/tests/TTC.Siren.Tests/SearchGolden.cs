@@ -9,6 +9,33 @@ namespace TTC.Siren.Tests;
 /// <summary>Helpers shared by the Phase 3 differential tests.</summary>
 internal static class SearchGolden
 {
+    /// <summary>D-004 coverage: does any hand hold two cards with the same card id (including two None ids)?</summary>
+    public static bool HasDuplicateHandIds(GameState g)
+    {
+        for (int p = 0; p < 2; p++)
+        {
+            for (int a = 0; a < g.HandCount(p); a++)
+            {
+                for (int b = a + 1; b < g.HandCount(p); b++)
+                {
+                    if (g.InstanceId(g.HandInstance(p, a)) == g.InstanceId(g.HandInstance(p, b))) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>How many cards in the hand of <paramref name="player"/> have the same card id as <paramref name="inst"/> (itself included).</summary>
+    public static int SameIdInHand(GameState g, int player, int inst)
+    {
+        int count = 0;
+        for (int k = 0; k < g.HandCount(player); k++)
+        {
+            if (g.InstanceId(g.HandInstance(player, k)) == g.InstanceId(inst)) count++;
+        }
+        return count;
+    }
+
     private static readonly Lazy<CardDb> LazyDb = new(() => CardDb.LoadFromRepository(AppContext.BaseDirectory));
 
     public static CardDb Db => LazyDb.Value;
