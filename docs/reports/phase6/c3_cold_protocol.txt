@@ -1,0 +1,9 @@
+C3 (6b61630) vs its predecessor (3a77dbe, C1 only), cold, ReferenceCompat 22-item suite.
+Goal protocol: tools/bench/run_cs_pinned.py --modes search --runs 7 --cold --affinity auto (0xFFF), baseline then candidate, medians over 7 process runs.
+Four repetitions, order alternated (P = predecessor, C = candidate):
+  rep1  P 0.04889 (spread 16.5%)   C 0.04519 (5.4%)    C vs P  -7.6%
+  rep2  C 0.04521 (7.2%)           P 0.04331 (20.8%)   C vs P  +4.4%
+  rep3  P 0.04227 (26.9%)          C 0.04553 (5.5%)    C vs P  +7.7%
+  rep4  C 0.04630 (6.5%)           P 0.04549 (25.5%)   C vs P  +1.8%
+Median of the four medians: P 0.04440, C 0.04536  (+2.2%). The sign of the difference changes between repetitions; the predecessor's own medians
+move by 16% (0.0423 .. 0.0489) while the candidate's move by 3% (0.0452 .. 0.0463). No repeatable regression above 3%.
