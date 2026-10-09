@@ -1,0 +1,19 @@
+search    deterministic output IDENTICAL
+search    total            median 0.024389 -> 0.018391 s  (-24.6%)
+fast      deterministic output IDENTICAL
+fast      on               median 2.300409 -> 1.776804 s  (-22.8%)
+fast      off              median 2.180438 -> 1.658491 s  (-23.9%)
+fast      fast             median 1.443147 -> 1.025672 s  (-28.9%)
+exact     deterministic output IDENTICAL
+exact     end5_same_plus   median 0.000016 -> 0.000014 s  (-14.2%)
+exact     mid4_rev_ace     median 0.000207 -> 0.000205 s  (-0.7%)
+exact     mid3_ascension   median 0.067545 -> 0.041909 s  (-38.0%)
+endgame   deterministic output IDENTICAL
+endgame   total            median 0.053564 -> 0.038586 s  (-28.0%)
+makeundo  deterministic output IDENTICAL
+makeundo  open_none        median 0.255542 -> 0.253028 s  (-1.0%)
+makeundo  open_same_plus   median 0.329341 -> 0.324736 s  (-1.4%)
+makeundo  mid3_ascension   median 0.747343 -> 0.374451 s  (-49.9%)
+makeundo  mid4_rev_ace     median 0.121027 -> 0.119276 s  (-1.4%)
+makeundo  end5_same_plus   median 0.134860 -> 0.134871 s  (+0.0%)
+makeundo  open_all_rules   median 1.050346 -> 0.585301 s  (-44.3%)

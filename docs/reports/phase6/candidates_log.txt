@@ -1,0 +1,12 @@
+C2 (reverted): snapshot/restore of the 19 modifiers via Span.CopyTo instead of a loop. Pinned 0xFFF warm, 5 process runs.
+  vs the stored post-C1 file (taken ~10 min earlier): exact mid3 +4.9%, Fast +6.2%, search +8.7%, open_none make/undo (no type rules, untouched code) +8.1%  -> machine drift
+  vs a fresh C1 re-run in the same window: exact mid3 -8.9%, Fast -1.7%/+1.0%, search -0.7%, robust pipeline -2.7%, make/undo mid3 -5.1%, end5 +7.5%
+  The sign flips with the baseline run, i.e. no repeatable >=3% improvement  -> reverted.
+C5a (reverted): EvaluateState uses a per-cell weight table and PlacementEdgeScoreAt(inst, cell) (no row/col arithmetic). Pinned warm, 7 runs, vs a base copy of the same window:
+  compat search +4.0%, TT-on -1.0%, TT-off -0.3%, Fast +0.4%  -> no gain (the arithmetic was not the cost), reverted.
+C6 (reverted): stackalloc double[n] instead of double[MaxMoves] for the move scores in FastSearcher.Node/CompatSearcher.Node (less zeroing per node; no unsafe/SkipLocalsInit). Pinned warm, 7 runs, base copy in the same window:
+  compat search -0.7%, TT-on -2.6%, TT-off -1.4%, Fast -1.7%  -> below the 3% bar, reverted.
+C8a (reverted): ApplyTypeModifier skips the Zobrist XOR and the store when the modifier is unchanged (display refresh kept). Pinned warm, 7 runs, base copy in the same window:
+  Fast +1.4..+1.7%, exact mid3_ascension +1.1%, robust pipeline +0.2%, make/undo with type rules +0.8% / -0.8%  -> no gain, reverted.
+C9 (reverted): ApplyTypeModifier refreshes the display edges through one slice per array instead of eight indexed accesses. Pinned warm, 7 runs, base copy in the same window, three comparisons:
+  exact mid3_ascension -3.7%, -2.4%, -2.8% (median -2.8%); Fast -0.6..-1.0%; make/undo with type rules -0.2..-2.7%; robust pipeline +0.6%  -> median below the 3% bar, reverted.

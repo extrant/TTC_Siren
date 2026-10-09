@@ -1,0 +1,12 @@
+search    deterministic output IDENTICAL
+search    total            median 0.036213 -> 0.045109 s  (+24.6%)
+fast      deterministic output IDENTICAL
+fast      on               median 2.314964 -> 1.819579 s  (-21.4%)
+fast      off              median 2.212376 -> 1.696155 s  (-23.3%)
+fast      fast             median 1.440897 -> 1.054031 s  (-26.8%)
+exact     deterministic output IDENTICAL
+exact     end5_same_plus   median 0.000037 -> 0.000038 s  (+2.7%)
+exact     mid4_rev_ace     median 0.000848 -> 0.000868 s  (+2.3%)
+exact     mid3_ascension   median 0.068207 -> 0.045031 s  (-34.0%)
+endgame   deterministic output IDENTICAL
+endgame   total            median 0.079269 -> 0.078514 s  (-1.0%)

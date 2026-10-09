@@ -1,0 +1,313 @@
+{
+ "label": "final 782a3b5",
+ "mode": "warm",
+ "affinity": "0xFFF",
+ "runs": 7,
+ "modes": {
+  "search": {
+   "timings": {
+    "total": {
+     "min": 0.018224300000000006,
+     "median": 0.0183914,
+     "max": 0.018925099999999993,
+     "values": [
+      0.018303999999999997,
+      0.0183417,
+      0.0183914,
+      0.018224300000000006,
+      0.018925099999999993,
+      0.018612800000000006,
+      0.018430600000000002
+     ]
+    }
+   },
+   "signature_sha256_16": "8b2fbbb55400a735",
+   "signature": [
+    "SIG search item=open_none/1 nodes=46 score=40154CCCCCCCCCCD move=56@6 alloc=0",
+    "SIG search item=open_none/2 nodes=214 score=C0123D70A3D70A3E move=64@7 alloc=0",
+    "SIG search item=open_none/3 nodes=4282 score=4012B33333333333 move=46@0 alloc=0",
+    "SIG search item=open_none/4 nodes=15807 score=C003851EB851EB85 move=27@8 alloc=0",
+    "SIG search item=open_same_plus/1 nodes=46 score=40154CCCCCCCCCCD move=56@6 alloc=0",
+    "SIG search item=open_same_plus/2 nodes=214 score=C0123D70A3D70A3E move=64@7 alloc=0",
+    "SIG search item=open_same_plus/3 nodes=4488 score=4012B33333333333 move=46@0 alloc=0",
+    "SIG search item=open_same_plus/4 nodes=12665 score=C003851EB851EB85 move=27@8 alloc=0",
+    "SIG search item=mid3_ascension/1 nodes=25 score=402D3851EB851EB8 move=53@5 alloc=0",
+    "SIG search item=mid3_ascension/2 nodes=68 score=401F3D70A3D70A3E move=53@5 alloc=0",
+    "SIG search item=mid3_ascension/3 nodes=403 score=402B851EB851EB85 move=53@5 alloc=0",
+    "SIG search item=mid3_ascension/4 nodes=889 score=401BD70A3D70A3D7 move=53@5 alloc=0",
+    "SIG search item=mid3_ascension/5 nodes=2404 score=40273851EB851EB8 move=53@5 alloc=0",
+    "SIG search item=mid4_rev_ace/1 nodes=16 score=4018CCCCCCCCCCCD move=56@6 alloc=0",
+    "SIG search item=mid4_rev_ace/2 nodes=53 score=BFE0000000000000 move=56@6 alloc=0",
+    "SIG search item=mid4_rev_ace/3 nodes=165 score=4006E147AE147AE1 move=56@6 alloc=0",
+    "SIG search item=mid4_rev_ace/4 nodes=402 score=BFD8000000000000 move=27@8 alloc=0",
+    "SIG search item=mid4_rev_ace/5 nodes=587 score=3FC51EB851EB8520 move=27@8 alloc=0",
+    "SIG search item=end5_same_plus/1 nodes=9 score=400AAE147AE147AE move=35@7 alloc=0",
+    "SIG search item=end5_same_plus/2 nodes=34 score=BFD0F5C28F5C28F4 move=35@7 alloc=0",
+    "SIG search item=end5_same_plus/3 nodes=75 score=4004AE147AE147AE move=35@7 alloc=0",
+    "SIG search item=end5_same_plus/4 nodes=111 score=4006147AE147AE15 move=48@3 alloc=0",
+    "SIG search-total nodes=43003"
+   ]
+  },
+  "fast": {
+   "timings": {
+    "on": {
+     "min": 1.7362468000000002,
+     "median": 1.7768041999999995,
+     "max": 1.8118131,
+     "values": [
+      1.7917892999999998,
+      1.8118131,
+      1.7737544,
+      1.7811896999999999,
+      1.7768041999999995,
+      1.7584444000000001,
+      1.7362468000000002
+     ]
+    },
+    "off": {
+     "min": 1.6034785000000003,
+     "median": 1.6584910000000006,
+     "max": 1.6726341000000005,
+     "values": [
+      1.6691074999999997,
+      1.6726341000000005,
+      1.6536209000000002,
+      1.6646640000000001,
+      1.6411625999999997,
+      1.6584910000000006,
+      1.6034785000000003
+     ]
+    },
+    "fast": {
+     "min": 1.0135339,
+     "median": 1.0256724,
+     "max": 1.0422176000000003,
+     "values": [
+      1.0260353,
+      1.0278553,
+      1.0422176000000003,
+      1.0256724,
+      1.0217872,
+      1.0135339,
+      1.0158305
+     ]
+    }
+   },
+   "signature_sha256_16": "457de1e07cd244b8",
+   "signature": [
+    "SIG fast item=open_none/1 nodes=46/46/46 score=40154CCCCCCCCCCD/40154CCCCCCCCCCD/40154CCCCCCCCCCD move=56@6/56@6/56@6 alloc=0",
+    "SIG fast item=open_none/2 nodes=214/214/772 score=C0123D70A3D70A3E/C0123D70A3D70A3E/C0123D70A3D70A3E move=64@7/64@7/64@7 alloc=0",
+    "SIG fast item=open_none/3 nodes=4282/4282/6186 score=4012B33333333333/4012B33333333333/4012B33333333333 move=46@0/46@0/46@0 alloc=0",
+    "SIG fast item=open_none/4 nodes=15807/15839/20497 score=C003851EB851EB85/C003851EB851EB85/C003851EB851EB85 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=open_none/5 nodes=88726/89702/111229 score=4011B33333333333/4011B33333333333/4011B33333333333 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=open_none/6 nodes=252908/263557/246484 score=C00147AE147AE148/C00147AE147AE148/C00147AE147AE148 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=open_none/7 nodes=832544/987977/851106 score=4003851EB851EB85/4003851EB851EB85/4003851EB851EB85 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=open_same_plus/1 nodes=46/46/46 score=40154CCCCCCCCCCD/40154CCCCCCCCCCD/40154CCCCCCCCCCD move=56@6/56@6/56@6 alloc=0",
+    "SIG fast item=open_same_plus/2 nodes=214/214/772 score=C0123D70A3D70A3E/C0123D70A3D70A3E/C0123D70A3D70A3E move=64@7/64@7/64@7 alloc=0",
+    "SIG fast item=open_same_plus/3 nodes=4488/4488/6380 score=4012B33333333333/4012B33333333333/4012B33333333333 move=46@0/46@0/46@0 alloc=0",
+    "SIG fast item=open_same_plus/4 nodes=12665/12699/16327 score=C003851EB851EB85/C003851EB851EB85/C003851EB851EB85 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=open_same_plus/5 nodes=97166/98349/119168 score=4012B33333333333/4012B33333333333/4012B33333333333 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=open_same_plus/6 nodes=349950/340169/343034 score=C00EB851EB851EB8/C00EB851EB851EB8/C00EB851EB851EB8 move=7@2/7@2/7@2 alloc=0",
+    "SIG fast item=open_same_plus/7 nodes=1031035/1221810/1074152 score=40047AE147AE147A/4004000000000000/4004000000000000 move=7@2/27@8/27@8 alloc=0",
+    "SIG fast item=mid3_ascension/1 nodes=25/25/25 score=402D3851EB851EB8/402D3851EB851EB8/402D3851EB851EB8 move=53@5/53@5/53@5 alloc=0",
+    "SIG fast item=mid3_ascension/2 nodes=68/68/74 score=401F3D70A3D70A3E/401F3D70A3D70A3E/401F3D70A3D70A3E move=53@5/53@5/53@5 alloc=0",
+    "SIG fast item=mid3_ascension/3 nodes=403/403/438 score=402B851EB851EB85/402B851EB851EB85/402B851EB851EB85 move=53@5/53@5/53@5 alloc=0",
+    "SIG fast item=mid3_ascension/4 nodes=889/952/909 score=401BD70A3D70A3D7/401BD70A3D70A3D7/401BD70A3D70A3D7 move=53@5/53@5/53@5 alloc=0",
+    "SIG fast item=mid3_ascension/5 nodes=2404/2587/2048 score=40273851EB851EB8/40273851EB851EB8/40273851EB851EB8 move=53@5/53@5/53@5 alloc=0",
+    "SIG fast item=mid3_ascension/6 nodes=3737/4542/3014 score=4020851EB851EB85/4020851EB851EB85/4020851EB851EB85 move=53@5/53@5/53@5 alloc=0",
+    "SIG fast item=mid3_ascension/7 nodes=3722/4582/3013 score=4020851EB851EB85/4020851EB851EB85/4020851EB851EB85 move=53@5/53@5/53@5 alloc=0",
+    "SIG fast item=mid3_ascension/8 nodes=3771/4796/3096 score=4020851EB851EB85/4020851EB851EB85/4020851EB851EB85 move=53@5/53@5/53@5 alloc=0",
+    "SIG fast item=mid4_rev_ace/1 nodes=16/16/16 score=4018CCCCCCCCCCCD/4018CCCCCCCCCCCD/4018CCCCCCCCCCCD move=56@6/56@6/56@6 alloc=0",
+    "SIG fast item=mid4_rev_ace/2 nodes=53/53/87 score=BFE0000000000000/BFE0000000000000/BFE0000000000000 move=56@6/56@6/56@6 alloc=0",
+    "SIG fast item=mid4_rev_ace/3 nodes=165/165/172 score=4006E147AE147AE1/4006E147AE147AE1/4006E147AE147AE1 move=56@6/56@6/56@6 alloc=0",
+    "SIG fast item=mid4_rev_ace/4 nodes=402/438/407 score=BFD8000000000000/BFD8000000000000/BFD8000000000000 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=mid4_rev_ace/5 nodes=587/720/582 score=3FC51EB851EB8520/3FC51EB851EB8520/3FC51EB851EB8520 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=mid4_rev_ace/6 nodes=588/720/575 score=3FC51EB851EB8520/3FC51EB851EB8520/3FC51EB851EB8520 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=mid4_rev_ace/7 nodes=576/711/564 score=3FC51EB851EB8520/3FC51EB851EB8520/3FC51EB851EB8520 move=27@8/27@8/27@8 alloc=0",
+    "SIG fast item=end5_same_plus/1 nodes=9/9/9 score=400AAE147AE147AE/400AAE147AE147AE/400AAE147AE147AE move=35@7/35@7/35@7 alloc=0",
+    "SIG fast item=end5_same_plus/2 nodes=34/34/36 score=BFD0F5C28F5C28F4/BFD0F5C28F5C28F4/BFD0F5C28F5C28F4 move=35@7/35@7/35@7 alloc=0",
+    "SIG fast item=end5_same_plus/3 nodes=75/75/76 score=4004AE147AE147AE/4004AE147AE147AE/4004AE147AE147AE move=35@7/35@7/35@7 alloc=0",
+    "SIG fast item=end5_same_plus/4 nodes=111/117/111 score=4006147AE147AE15/4006147AE147AE15/4006147AE147AE15 move=48@3/48@3/48@3 alloc=0",
+    "SIG fast item=end5_same_plus/5 nodes=111/117/111 score=4006147AE147AE15/4006147AE147AE15/4006147AE147AE15 move=48@3/48@3/48@3 alloc=0",
+    "SIG fast item=open_all_rules/1 nodes=46/46/46 score=4014CCCCCCCCCCCD/4014CCCCCCCCCCCD/4014CCCCCCCCCCCD move=31@0/31@0/31@0 alloc=0",
+    "SIG fast item=open_all_rules/2 nodes=296/296/608 score=C016000000000000/C016000000000000/C016000000000000 move=31@6/31@6/31@6 alloc=0",
+    "SIG fast item=open_all_rules/3 nodes=4230/4230/5973 score=401E333333333333/401E333333333333/401E333333333333 move=42@7/42@7/42@7 alloc=0",
+    "SIG fast item=open_all_rules/4 nodes=23369/23375/34939 score=C016C28F5C28F5C3/C016C28F5C28F5C3/C016C28F5C28F5C3 move=31@6/31@6/31@6 alloc=0",
+    "SIG fast item=open_all_rules/5 nodes=182560/184380/204523 score=40243851EB851EB8/40243851EB851EB8/40243851EB851EB8 move=40@4/40@4/40@4 alloc=0",
+    "SIG fast item=open_all_rules/6 nodes=527557/513619/589731 score=C01AA3D70A3D70A4/C01AA3D70A3D70A4/C01AA3D70A3D70A4 move=42@2/42@2/42@2 alloc=0",
+    "SIG fast-total nodes=3431185/3771758/3625620 identical=40 different=0"
+   ]
+  },
+  "exact": {
+   "timings": {
+    "end5_same_plus": {
+     "min": 1.31e-05,
+     "median": 1.39e-05,
+     "max": 1.75e-05,
+     "values": [
+      1.39e-05,
+      1.72e-05,
+      1.34e-05,
+      1.75e-05,
+      1.51e-05,
+      1.31e-05,
+      1.32e-05
+     ]
+    },
+    "mid4_rev_ace": {
+     "min": 0.0001908,
+     "median": 0.0002051,
+     "max": 0.0002804,
+     "values": [
+      0.0001951,
+      0.0002804,
+      0.0002038,
+      0.0002242,
+      0.0002221,
+      0.0002051,
+      0.0001908
+     ]
+    },
+    "mid3_ascension": {
+     "min": 0.0407427,
+     "median": 0.0419086,
+     "max": 0.0445014,
+     "values": [
+      0.0419602,
+      0.0445014,
+      0.0413082,
+      0.0414094,
+      0.0419086,
+      0.0407427,
+      0.0421875
+     ]
+    }
+   },
+   "signature_sha256_16": "a14d89aa07fe733c",
+   "signature": [
+    "SIG exact item=end5_same_plus value=1 make_moves=217",
+    "SIG exact item=mid4_rev_ace value=-2 make_moves=4707",
+    "SIG exact item=mid3_ascension value=-1 make_moves=241264"
+   ]
+  },
+  "endgame": {
+   "timings": {
+    "total": {
+     "min": 0.0373657,
+     "median": 0.038585500000000016,
+     "max": 0.03936329999999998,
+     "values": [
+      0.038585500000000016,
+      0.03854790000000001,
+      0.03936329999999998,
+      0.038427800000000026,
+      0.0391121,
+      0.0373657,
+      0.0389785
+     ]
+    }
+   },
+   "signature_sha256_16": "4cf59289094219cd",
+   "signature": [
+    "SIG endgame same=72 different=0"
+   ]
+  },
+  "makeundo": {
+   "timings": {
+    "open_none": {
+     "min": 0.2290928,
+     "median": 0.2530278,
+     "max": 0.2584356,
+     "values": [
+      0.2473157,
+      0.2362824,
+      0.2290928,
+      0.2583979,
+      0.2530278,
+      0.2544057,
+      0.2584356
+     ]
+    },
+    "open_same_plus": {
+     "min": 0.2961198,
+     "median": 0.3247364,
+     "max": 0.3319495,
+     "values": [
+      0.3247364,
+      0.3066617,
+      0.2961198,
+      0.3319495,
+      0.3211608,
+      0.3264895,
+      0.3273381
+     ]
+    },
+    "mid3_ascension": {
+     "min": 0.3630972,
+     "median": 0.3744508,
+     "max": 0.3920794,
+     "values": [
+      0.3706625,
+      0.3630972,
+      0.3737034,
+      0.3744508,
+      0.3784248,
+      0.3920794,
+      0.3803663
+     ]
+    },
+    "mid4_rev_ace": {
+     "min": 0.1132733,
+     "median": 0.1192765,
+     "max": 0.1218981,
+     "values": [
+      0.1164963,
+      0.1132733,
+      0.1160918,
+      0.1218981,
+      0.1192765,
+      0.1206105,
+      0.1198563
+     ]
+    },
+    "end5_same_plus": {
+     "min": 0.1305985,
+     "median": 0.1348712,
+     "max": 0.1389876,
+     "values": [
+      0.1305985,
+      0.1323634,
+      0.133763,
+      0.1381081,
+      0.136919,
+      0.1348712,
+      0.1389876
+     ]
+    },
+    "open_all_rules": {
+     "min": 0.5712642,
+     "median": 0.5853005,
+     "max": 0.6002343,
+     "values": [
+      0.5781647,
+      0.5712642,
+      0.581313,
+      0.5862988,
+      0.5853005,
+      0.6002343,
+      0.5933471
+     ]
+    }
+   },
+   "signature_sha256_16": "575d814747eec483",
+   "signature": [
+    "SIG makeundo item=open_none checksum=34908746 alloc=0",
+    "SIG makeundo item=open_same_plus checksum=42517695 alloc=0",
+    "SIG makeundo item=mid3_ascension checksum=14167928 alloc=0",
+    "SIG makeundo item=mid4_rev_ace checksum=5314880 alloc=0",
+    "SIG makeundo item=end5_same_plus checksum=86835864 alloc=0",
+    "SIG makeundo item=open_all_rules checksum=44030866 alloc=0"
+   ]
+  }
+ }
+}

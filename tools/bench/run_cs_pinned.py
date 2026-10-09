@@ -84,7 +84,7 @@ def run_once(mode, mask, cold):
 
 
 def spread(values):
-    return {'min': min(values), 'median': statistics.median(values), 'max': max(values)}
+    return {'min': min(values), 'median': statistics.median(values), 'max': max(values), 'values': values}
 
 
 def main():

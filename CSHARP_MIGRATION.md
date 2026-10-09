@@ -5,7 +5,7 @@
 > 任何 Phase 完成后必须更新本文件。
 >
 > **新会话快速上手：先读 `CLAUDE.md`，再读本文件 §12「会话交接」（当前状态、如何构建/测试、用户已做的决定、未解决问题、下一步），然后按需读 §0 与 §7。**
-> 当前一句话状态：Phase 1–5 完成（Phase 5 于 2026-10-08 完成，验收见 §7 Phase 5；M4-1/M4-2 已先行解决）；Phase 6 已获授权并进行中（2026-10-09，`.claude/phase6_goal.md`：A 提交并推送 Phase 5 → B D-004 双边修复 → C 性能优化）；工作在分支 `csharp-solver-migration`（Phase 5 已提交并推送到 `b6e4ea4`；B、C 的提交只在本地，未推送；**没有**对 `main` 的 PR——PR #1 已按用户要求关闭）。
+> 当前一句话状态：Phase 1–5 完成（Phase 5 于 2026-10-08 完成，验收见 §7 Phase 5；M4-1/M4-2 已先行解决）；Phase 6 已完成，等待独立审查（2026-10-10；`.claude/phase6_goal.md`：A 提交并推送 Phase 5 → B D-004 双边修复 → C 性能优化，三步均已完成）；工作在分支 `csharp-solver-migration`（Phase 5 已提交并推送到 `b6e4ea4`；B（`a0eb193`）、C（`48e38cd`…`782a3b5`）的提交只在本地，未推送；**没有**对 `main` 的 PR——PR #1 已按用户要求关闭）。
 
 ---
 
@@ -18,7 +18,7 @@
 | 3 | Evaluator / MoveOrdering / History / Minimax / AlphaBeta / ID（ReferenceCompat，节点级 parity） | **DONE**（2026-10-07，验收见 §7 Phase 3） |
 | 4 | Zobrist / 带 bound 的 TranspositionTable / Fast 搜索模式 | **DONE**（2026-10-07，Q-5 = 选项 (b)，验收见 §7 Phase 4） |
 | 5 | 精确残局 + 信息集 robust 残局 + Python-vs-C# 全量 benchmark | **DONE**（2026-10-08，验收见 §7 Phase 5；先行解决了 M4-1/M4-2；benchmark 报告 `docs/reports/PHASE5_BENCHMARK.md`） |
-| 6 | Profiler 驱动优化（单线程）→ 可选 root parallelism | NOT STARTED — Phase 5 benchmark 独立审查结论 **`BENCHMARK_VALID_WITH_CAVEATS`**（`docs/reviews/OPUS_PHASE5_BENCHMARK_REVIEW.md`：没有正确性回归；49.7× 是冷 JIT 数字，热态约 110×；精确求解的 263× 不可复现，约 165×）。建议 Phase 6 之前先执行 `.claude/sonnet_review_fix_goal.md`（只修 benchmark 工具与报告），否则 §6 的 Baseline→Compare 不可靠。**整改复审（2026-10-08，审查文档 §12）**：B-1 到 B-5 全部 RESOLVED，结论仍为 `BENCHMARK_VALID_WITH_CAVEATS`，更正后的数字在固定到 P 核的复测中得到确认；新发现 **A-7**（混合架构 CPU 的 P/E 核调度不受控，未固定亲和性时比值可偏高约 1.6–1.7×，C# 自身在 E 核上慢约 1.45×），Phase 6 之前需先执行新的 `.claude/sonnet_review_fix_goal.md`（只含 A-7）。**A-7 复审（2026-10-08，审查文档 §13）**：A-7 RESOLVED（`tools/bench/pin.py` + `run_interleaved.py --affinity`，两边固定在同一 P 核集，独立复测一致），B-1 到 B-5 无回归，结论 `BENCHMARK_VALID_WITH_CAVEATS`；可信范围（对 CPython 3.11.4、两边都在 P 核）：Python 语义搜索 warm 113–118×、cold ≈52–91×（双峰）；robust 流水线 warm 169–180×、cold 109–123×；精确求解 159–176×。**从 benchmark 角度可以开始 Phase 6**（仍需用户明确授权；Phase 6 的所有 Baseline→Compare 必须固定亲和性并记录掩码）。**用户已授权 Phase 6（2026-10-09）**：任务 `.claude/phase6_goal.md`（先提交并推送 Phase 5、再做 Q-2/D-004 双边修复，然后才是 Phase 6 的性能工作）；进行中 → 完成后等待独立审查 |
+| 6 | Profiler 驱动优化（单线程）→ 可选 root parallelism | **DONE，等待独立审查**（2026-10-10；root parallelism 未授权、未做）— 以下为授权前的审查记录： Phase 5 benchmark 独立审查结论 **`BENCHMARK_VALID_WITH_CAVEATS`**（`docs/reviews/OPUS_PHASE5_BENCHMARK_REVIEW.md`：没有正确性回归；49.7× 是冷 JIT 数字，热态约 110×；精确求解的 263× 不可复现，约 165×）。建议 Phase 6 之前先执行 `.claude/sonnet_review_fix_goal.md`（只修 benchmark 工具与报告），否则 §6 的 Baseline→Compare 不可靠。**整改复审（2026-10-08，审查文档 §12）**：B-1 到 B-5 全部 RESOLVED，结论仍为 `BENCHMARK_VALID_WITH_CAVEATS`，更正后的数字在固定到 P 核的复测中得到确认；新发现 **A-7**（混合架构 CPU 的 P/E 核调度不受控，未固定亲和性时比值可偏高约 1.6–1.7×，C# 自身在 E 核上慢约 1.45×），Phase 6 之前需先执行新的 `.claude/sonnet_review_fix_goal.md`（只含 A-7）。**A-7 复审（2026-10-08，审查文档 §13）**：A-7 RESOLVED（`tools/bench/pin.py` + `run_interleaved.py --affinity`，两边固定在同一 P 核集，独立复测一致），B-1 到 B-5 无回归，结论 `BENCHMARK_VALID_WITH_CAVEATS`；可信范围（对 CPython 3.11.4、两边都在 P 核）：Python 语义搜索 warm 113–118×、cold ≈52–91×（双峰）；robust 流水线 warm 169–180×、cold 109–123×；精确求解 159–176×。**从 benchmark 角度可以开始 Phase 6**（仍需用户明确授权；Phase 6 的所有 Baseline→Compare 必须固定亲和性并记录掩码）。**用户已授权 Phase 6（2026-10-09）**：任务 `.claude/phase6_goal.md`（A：提交并推送 Phase 5 —— 已完成，`b6e4ea4`；B：Q-2/D-004 双边修复 —— 已完成，`a0eb193`，本地；C：Phase 6 的性能工作 —— 已完成，本地）。**Phase 6 状态：DONE，等待独立审查**（见 §7 Phase 6 交付记录与 `docs/reports/PHASE6_OPTIMIZATION.md`）；B、C 的提交未推送，Phase 7 未开始 |
 | 7 | 集成策略：Python 服务调用 C# 引擎（桥接 + 回退） | NOT STARTED |
 | 8 | 全量服务移植（请求解析、未知牌采样、MC、分析文案、app.py 子系统、HTTP） | NOT STARTED |
 | 9 | 可选：CP-SAT 隐藏牌组合 / deck optimization / scenario generation | NOT STARTED |
@@ -751,6 +751,18 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 范围：用 dotnet-trace / BenchmarkDotNet 找热点，每次改动都走 CLAUDE.md §6 的流程；可能的方向（必须先测量）：增量评估、ordering 计算缓存、TT 大小与布局、残局 α-β（值必须保持精确）。单线程完成后，经用户批准才做 root parallelism。
 验收：每次改动都有 Baseline/After 数据，parity 全部保持。
 
+#### Phase 6 交付记录（2026-10-10，`.claude/phase6_goal.md` 步骤 C；详细数据 `docs/reports/PHASE6_OPTIMIZATION.md`）
+
+**状态：DONE，等待独立审查**（审查门禁由审查者设置，整改者不设）。单线程；没有 `unsafe`、SIMD、多线程；没有 root parallelism；没有改变任何规则/搜索语义。所有计时固定在 P 核 `0xFFF`（`run_cs_pinned.py` / `run_interleaved.py --affinity auto`），B、C 的提交只在本地，未推送。
+- **工具**：`tools/bench/run_cs_pinned.py`（C# 单独、固定亲和性、多次进程运行 min/median/max、检查确定性输出的 SIG 签名在每次运行与基线之间完全相同、`--exe` 做同窗口 A/B）、`tools/bench/profile_summary.py`（`dotnet-trace` 固定核采集并汇总 Speedscope）、`Bench` 的 `SIG` 行、make/undo 的 `RESULT` 行与 `loop fast|compat|exact`。
+- **profile（优化前）**：Fast——`MakeMove` 44%（`RecalculateTypeModifiers` 29%）、`EvaluateState` 31%；compat——`OrderMoves` 57%；exact——`RecalculateTypeModifiers` 59%（复现评审 §8）。
+- **保留的改动（各为一个本地提交）**：C1 `3a77dbe` 一次遍历实例表重算同类修正（同类强化 exact −33%、Fast −10%、含同类规则的 make/undo −43..−48%）；C3 `6b61630` 查表式 `PlacementEdgeScore`（compat −20%、Fast −19%，位级相同，因为所有项都是 0.5 的倍数）；C4a `2c226bb` `EvaluateMove` 走邻接表（compat −6%）；C7 `782a3b5` 每线程复用 exact memo（robust 流水线 −21%，评审 L5-2）。
+- **回退并记录的候选**：C2 Span 拷贝快照、C5a `EvaluateState` 单元格权重表、C6 缩小 `stackalloc`、C8a 修正值未变时跳过哈希、C9 切片刷新显示边（中位数 −2.8%，未到 3%）。
+- **同窗口 A/B（原始 vs 最终，warm，7 次）**：compat −24.6%、Fast −28.9%（TT 开/关 −22.8/−23.9%）、exact mid3 −38.0%、robust −28.0%；不含同类规则的 make/undo 不变。**与 Python 交替（两边 `0xFFF`，warm）**：fixed **156–162×**（基线 114–119×）、exact **260–269×**（167–171×，其中 1.235× 是 memo 键）、robust **232–248×**（181–186×，其中 1.074× 算法性）。
+- **不变量**：78/78 测试（无断言被放宽），pytest 34 passed；ReferenceCompat 的 SIG（节点数、分数位、走法）、Fast 的 41 行（节点数、分数位、走法，40/40 `same`）、exact 值与 `make_move` 数（1/−2/−1；217/4,707/241,264）、72/72 选择、make/undo 校验和与原始构建**逐字相同**；热路径分配仍为 0。
+- **一个需要审查者/用户确认的判断**：C3 使 cold（默认分层 JIT）下的 22 项 compat 总时间 +25%（单项 `open_none` d4 的 tier-up 窗口：其余 21 项 cold 反而快 10–35%，`TieredCompilation=0` 时 −15%），按字面的"其他地方回退 > 3% 则回退"规则不满足；因 warm −20%、Fast cold −18%、且不是代码变慢，选择保留并如实记录（`PHASE6_OPTIMIZATION.md` §5）。
+- **仍存在的热点**：同类修正维护（exact 42%、Fast 18%，需要能精确复现 D-017/D-003 的结构性方案）、`EvaluateState` 的 9 次落点评分（Fast 29%）、compat 的 `EvaluateMove`（39%）、`ResolveFlips`（11–16%）。
+
 ### Phase 7 — 集成策略
 
 建议方案：C# 引擎做成常驻子进程（stdin/stdout JSON 行协议）或 localhost HTTP；Python `ai_server` 仍然负责请求解析和未知牌采样，然后把完整确定的状态交给 C#（minimax + robust 残局），出错或超时时回退到 Python 求解器（受开关控制）。
@@ -858,14 +870,19 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | 2026-10-08 | 5 A-7 | 两边固定在 P 核 `0xFFF`，3 轮交替，warm C#（min / median / max） | fixed：Python 3.0420 / 3.0725 / 3.1000 s，C# 0.02625 / 0.02625 / 0.02635 s，**115.9 / 116.6 / 118.1×**；exact（3 个局面）：Python 11.3794 / 11.4229 / 11.5766 s，C# 0.07024 / 0.07052 / 0.07186 s，**161.1 / 162.0 / 162.0×**（`mid3_ascension` Python 11.312 / 11.358 / 11.509 s，C# 0.06999 / 0.07018 / 0.07163 s）；robust 流水线：Python 9.7953 / 10.0004 / 10.0500 s，C# 0.05730 / 0.05788 / 0.05823 s，**169.2 / 172.6 / 174.5×** | 节点数 43,003、exact 值 1/−2/−1、72/72 选择每轮相同；与评审的 P 核固定值一致（fixed 118–121×、robust 178–189×、exact 150–180×；差在 15% 内） |
 | 2026-10-08 | 5 A-7 | 同上，cold C#（`--cold`） | fixed：Python 2.8286 / 2.9547 / 3.0894 s，C# 0.03396 / 0.03591 / 0.04685 s，**60.4 / 82.3 / 91.0×**；exact：**159.5 / 170.2 / 174.5×**（`mid3_ascension` Python 10.707 / 10.870 / 11.112 s，C# 0.06176 / 0.06482 / 0.06664 s）；robust：Python 9.1942 / 9.4752 / 9.5828 s，C# 0.07799 / 0.08463 / 0.08564 s，**108.6 / 110.6 / 122.9×** | **暂定，待用户确认**：fixed cold 的第 1 轮 91.0× 比评审的 55–73× 上界高 25%（超过目标文件的 15% 带），中位数 82.3× 在带内。再跑 8 个固定到 `0xFFF` 的 cold 轮（仅 fixed）：83.6 / 57.5 / 59.4 / 81.9 / 81.0 / 70.1 / 63.0 / 63.8×；11 轮合计 **57.5–91.0×，中位数 70.1×**；C# cold 总时间呈双峰（约 0.035 s 或约 0.048 s，取决于 tier-1 代码何时到位），Python 稳定。用户只回复了"继续"，助手按最保守的方式暂定口径（不等于用户批准）：**同时写出完整范围与中位数（"57–91×，中位数 70×"），不写单个数字，也不收窄成"可信区间"**；可一句话改动 |
 | 2026-10-08 | 5 A-7 | 两边固定在 E 核 `0xFF000`，warm，3 轮（记录核心类别的影响） | fixed：Python 4.7197 / 4.7386 / 4.7398 s，C# 0.03666 / 0.03679 / 0.03726 s，126.7 / 128.8 / 129.2×；exact：Python 16.4582 / 16.6698 / 17.4180 s，C# 0.09320 / 0.09331 / 0.09345 s，176.4 / 178.4 / 186.9×；robust：Python 15.4046 / 15.4759 / 15.7849 s，C# 0.08032 / 0.08238 / 0.08300 s，186.4 / 187.0 / 196.5× | E 核让 Python 慢 1.46–1.55×、C# 慢 1.32–1.42×；两边同类时比值只高 8–10%，**混合放置**才会破坏比值（评审曾见 271× / 301×，P 核固定的真实值约 162× / 173×） |
+| 2026-10-10 | 6 | C# 基线（`a0eb193`，未优化），固定 P 核 `0xFFF`，warm，3 次进程运行，`run_cs_pinned.py` | search / fast / exact / endgame / make-undo | 22 项 0.02338 s；Fast d≥4（TT 开/关/Fast）2.306/2.193/1.438 s；exact mid3 0.06447 s；robust 流水线 0.05238 s；make/undo mid3 0.7239 s、open_all_rules 1.0257 s | cold（5 次）：search 0.0409、exact mid3 0.0652、endgame 0.0777 s；交替 Python/C#：fixed 114–119×、exact 167–171×、robust 181–186×（warm） |
+| 2026-10-10 | 6 | profile（`dotnet-trace`，采样线程时间，12 s，固定 `0xFFF`，`Bench loop`） | 优化前 | Fast：`MakeMove` 44%（`RecalculateTypeModifiers` 29%）、`EvaluateState` 31%；compat：`OrderMoves` 57%（`EvaluateMove` 45%）；exact：`MakeMove` 72%（`RecalculateTypeModifiers` 59%） | 复现评审 §8 的证据；原始摘要在 `docs/reports/phase6/profile_*_before.txt` |
+| 2026-10-10 | 6 | 同窗口 A/B：原始提交 `48e38cd` vs 最终 `782a3b5`，`0xFFF`，warm，7 次进程运行 | 逐项 | compat 22 项 0.02439 → 0.01839 s（−24.6%）；Fast（TT 开/关/Fast）2.300/2.180/1.443 → 1.777/1.658/1.026 s（−22.8/−23.9/−28.9%）；exact mid3 0.06755 → 0.04191 s（−38.0%）；robust 0.05356 → 0.03859 s（−28.0%）；make/undo 含同类规则 −49.9%/−44.3%，不含同类规则 ±1.4%（不变） | 节点数、分数位、走法、exact 值、make/undo 校验和全部与原始构建逐字相同（SIG 哈希相同）；cold：Fast −21..−27%、exact mid3 −34%、robust −1%（另一次 −20%）、**compat 22 项 +24.6%**（单项 open_none d4 的 tier-up 窗口，见 `PHASE6_OPTIMIZATION.md` §5，需审查者确认） |
+| 2026-10-10 | 6 | 交替 Python/C#，两边固定 `0xFFF`，3 轮（优化后） | fixed / exact / robust | warm：**156.1/159.9/162.1×**、**259.5/264.4/269.1×**、**231.5/245.9/247.9×**；cold：64.9/67.6/71.8×、252.1/256.9/259.0×、127.6/147.3/147.4× | 对 CPython 3.11.4；exact 中 1.235× 来自 memo 键、robust 中 1.074× 来自 memo 共享方式（算法性） |
+| 2026-10-10 | 6 | 候选记录 | C1–C9 | 保留：C1 一次遍历实例表重算同类修正、C3 查表式 `PlacementEdgeScore`、C4a `EvaluateMove` 用邻接表、C7 复用 exact memo；回退：C2（Span 拷贝快照）、C5a、C6、C8a、C9（−2.8% 中位数） | 每个候选的数据见 `docs/reports/PHASE6_OPTIMIZATION.md` §3 与 `docs/reports/phase6/candidates_log.txt` |
 | 2026-10-07 | 2 | Python（参考） | `_solve_endgame_exact` 复测 | end5: 217 make / 0.004 s；mid4_rev_ace: 4,707 make / 0.055 s（≈85k make/s） | 与 Phase 1 一致；Python 的 make/s 含 minimax 与 memo 开销，不是纯 make/undo，不可直接比 |
 
 ---
 
 ## 11. 下一步行动
 
-0. **Phase 1–5 完成。Phase 6（Profiler 驱动优化，单线程；root parallelism 需单独批准）尚未开始，等待用户明确授权**（CLAUDE.md：一次只授权一个阶段；可以用 `/goal @.claude/phase_goal.md` 授权，它会选中 Phase 6）。Phase 4 的审查门禁 `PASS_TO_PHASE_5` 已完成其使命；**Phase 5 的改动没有经过独立审查**——如果需要，可以像 Phase 2+3、Phase 4 那样让审查者复核 Phase 5（重点：D-015 的手牌顺序影响、精确求解器 memo 的上下文规则、场景构造与 Python 的排序/排列/截断、覆盖逻辑的 AST 提取、golden 的源码绑定）。
-1. 工作区状态：Phase 5 的全部改动 **尚未提交**（已修改：`CSHARP_MIGRATION.md`、`csharp/src/TTC.Siren.Bench/Program.cs`、`csharp/src/TTC.Siren.Search/SearchContext.cs`、`csharp/tests/TTC.Siren.Tests/GoldenFiles.cs`、`tools/parity/py_rules_trace.py`、`tools/parity/py_search_trace.py`；新增：`ExactEndgameSolver.cs`、`EndgameScenarios.cs`、`EndgameRobust.cs`、`EndgameDifferentialTests.cs`、`ExactEndgameSolverTests.cs`、`ZobristSufficiencyTests.cs`、`GoldenBindingTests.cs`、`GoldenSources.cs`、`tools/parity/golden_sources.py`、`tools/parity/py_endgame_trace.py`、`tools/bench/py_endgame_bench.py`、`docs/reports/PHASE5_BENCHMARK.md`；`tools/bench/endgame_bench_positions.json` 是生成物，可以重新生成）。用户没有要求就不要 commit/push（CLAUDE.md §8）。`csharp/.vs/` 是 Visual Studio 的本地目录，不是本工作产生的，不应提交。PR #1 已关闭，`main` 仍是 `eb60a02`。
+0. **Phase 1–6 完成（Phase 6 等待独立审查）。** 下一步由用户决定：(a) 让审查者复核 Phase 5、D-004 修复（FIXED-BOTH）与 Phase 6（重点：C3 的 cold 判断，`PHASE6_OPTIMIZATION.md` §5；各保留提交的位级不变量；`run_cs_pinned.py` 的同窗口 A/B 方法）；(b) 是否推送本地提交 `a0eb193`（D-004）与 `48e38cd`…`782a3b5`（Phase 6）到 `origin/csharp-solver-migration`（CLAUDE.md §8：未经授权不推送）；(c) 是否授权 root parallelism（Phase 6 末尾，需单独批准）；(d) Phase 7（D-015 已定：标准搜索用 Fast，robust 前恢复规范手牌顺序）。**Phase 7 未开始，需要用户明确授权。**
+1. 工作区状态（2026-10-10）：分支 `csharp-solver-migration`，Phase 5 的 5 个提交已推送（`710a70e..b6e4ea4`）；本地未推送：`a0eb193`（D-004 双边修复 + D-019）、`48e38cd`（Phase 6 工具）、`3a77dbe`（C1）、`6b61630`（C3）、`2c226bb`（C4a）、`782a3b5`（C7）以及随后的文档提交。`csharp/.vs/`、`bin/`、`obj/`、golden 数据不入库。PR #1 已关闭，`main` 仍是 `eb60a02`。
 2. Phase 6 开始前不需要用户回答问题。已有默认的待决问题：Q-2（D-004，Phase 7 前）、Q-3（连携一层，Phase 8 前）、Q-6（PyPy baseline，按默认 CPython）。
 3. 仍未处理的审查遗留项：M4-3（搜索后的手牌顺序/显示边与 Python 对比、golden 偏向后期局面——**D-015 说明手牌顺序对 robust 选择有影响，Phase 7 前必须处理**）、L4-1 到 L4-7、O4-1 到 O4-3、Phase 3 的 L-1 到 L-12 与 O-1 到 O-5（见 §12.7）。
 
@@ -908,7 +925,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | 推送分支 | DONE | 用户于 2026-10-08 明确要求：`d0ef721..710a70e` 推送到 `origin/csharp-solver-migration`（`main` 未动） |
 | M4-1、M4-2 | DONE（2026-10-08） | 用户要求在生成任何 Phase 5 golden 之前先解决，不扩大为 Phase 4 清理 |
 | **Phase 5** 精确残局 / robust / 场景 / benchmark | **DONE**（2026-10-08，`/goal @.claude/phase_goal.md`） | 验收见 §7 Phase 5；Q-4、Q-6 保持默认；改动未提交 |
-| **Phase 6** | **未开始** | 需要用户明确授权 |
+| **Phase 6** | **DONE，等待独立审查**（2026-10-10） | 用户 2026-10-09 授权 `.claude/phase6_goal.md`：A 推送 Phase 5（`b6e4ea4`）、B Q-2/D-004 双边修复（`a0eb193`，本地）、C 性能优化（4 个保留提交，本地）；详见 §7 Phase 6 交付记录 |
 
 ### 12.3 代码地图（`csharp/`，.NET `net10.0`，`Nullable`、`TreatWarningsAsErrors`）
 
@@ -933,7 +950,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 ```
 dotnet build csharp/TTC.Siren.sln -c Release --no-incremental        # 期望 0 warning / 0 error
 dotnet test  csharp/TTC.Siren.sln -c Release                           # 期望 78 通过 / 0 跳过，约 30 s（缓存的 golden 存在时）；golden 首次生成或源码哈希变化后重新生成约 10 分钟
-python -m pytest -q                                                    # 期望 29 passed（26 原有 + 3 个 D-002 回归）
+python -m pytest -q                                                    # 期望 34 passed（26 原有 + 3 个 D-002 回归 + 5 个 D-004 回归）
 dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- search [runs=5]
 dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- makeundo [pairs=2000000] [runs=5]
 dotnet run -c Release --project csharp/src/TTC.Siren.Bench -- fast [runs=5]     # Phase 4：compat TT 开 / compat TT 关（oracle）/ Fast
@@ -1007,6 +1024,14 @@ python tools/bench/py_endgame_bench.py --out tools/bench/endgame_bench_positions
 4. 后续阶段顺序见 §0/§7：Phase 6（profiler 驱动优化）→ 7（Python 服务调用 C# 引擎，需先定 Q-2）→ 8（全量服务移植）→ 9（可选 CP-SAT）。
 
 ---
+
+### 12.9 Phase 6 之后的补充（2026-10-10）
+
+- **计时规则**：混合 CPU，所有计时必须固定到 P 核（`--affinity auto` / `pin.py`），记录掩码、warm/cold、≥3 次独立进程运行的 min/median/max。机器会漂移（同一代码一小时后 +6%），所以保留/回退只和**同窗口的基线构建**比较（`run_cs_pinned.py --exe <上一提交的 Bench 文件夹>`；该文件夹必须在仓库目录树内才能找到 `data/`，或用 `git worktree` 构建）。C# 单独跑：`python tools/bench/run_cs_pinned.py --modes search,fast,exact,endgame,makeundo --runs 5 --affinity auto [--cold] [--compare base.json] [--save out.json]`；profile：`python tools/bench/profile_summary.py --collect fast|compat|exact`。
+- **确定性签名**：`Bench` 输出的 `SIG` 行（节点数、分数位、走法、exact 值、校验和、分配）在优化前后必须完全相同，`run_cs_pinned.py --compare` 会逐行检查。
+- **golden**：重复 id（D-004）现在在 rules/search/endgame golden 里占 12.5%（robust 25%）；生成器版本 `py_rules_trace/4`、`py_search_trace/3`、`py_endgame_trace/2`；首次 `dotnet test` 会重新生成（约 8 分钟）。
+- **C# 的重复 id 语义**：`FromSnapshot` 接受重复 id；机器人层按 Python 的"同 id 取手牌第一张"（D-019），在入口处（Make/Undo 重排手牌之前）解析。
+- 未处理的审查遗留项不变（M4-3、L4-*、O4-*、Phase 3 的 L-*/O-*）；O-1（`SkipLocalsInit`，需要 `AllowUnsafeBlocks`）与 O-2（compat 的时钟读取，定深度运行不读时钟）按 `PHASE6_OPTIMIZATION.md` §3 的理由未做。
 
 ## 附录 A — Phase 1 benchmark 脚本（Phase 2 时作为 `tools/bench/py_bench.py` 提交）
 
