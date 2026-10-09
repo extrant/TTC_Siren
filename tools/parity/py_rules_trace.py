@@ -34,13 +34,15 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, ROOT)
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import csv_compat as pd  # noqa: E402
+import golden_sources as GS  # noqa: E402
 from core.board import Board  # noqa: E402
 from core.card import Card  # noqa: E402
 from core.game_state import GameState  # noqa: E402
 from core.player import Player  # noqa: E402
 
-GENERATOR_VERSION = 'py_rules_trace/2'  # 2: D-002 fixed (undo restores type_modifier by card identity)
+GENERATOR_VERSION = 'py_rules_trace/3'  # 2: D-002 fixed (undo restores type_modifier by card identity); 3: header binds the source (M4-2)
 RULE_NAMES = ['同数', '加算', '逆转', '王牌杀手', '同类强化', '同类弱化', '秩序', '混乱']
 TYPE_NAMES = ['兽人', '拂晓', '帝国', '蛮神']
 OWNER_CODE = {'red': 'r', 'blue': 'b', None: None}
@@ -73,6 +75,7 @@ def dump_carddb(out_path):
         if key not in lookup:
             lookup[key] = r['id']
     doc = {
+        'header': dict(GS.header_fields('carddb'), generator=GENERATOR_VERSION, kind='carddb'),
         'cards': [[r['id'], r['up'], r['right'], r['down'], r['left'], r['star'], r['type']] for r in rows],
         'lookup': [[k[0], k[1], k[2], k[3], v] for k, v in lookup.items()],
     }
@@ -256,8 +259,8 @@ def generate_sequence(seed, index, db):
 def generate(out_path, seed, count):
     db = load_db_rows()
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    header = {'header': {'generator': GENERATOR_VERSION, 'seed': seed, 'count': count,
-                         'python': platform.python_version()}}
+    header = {'header': dict({'generator': GENERATOR_VERSION, 'seed': seed, 'count': count,
+                              'python': platform.python_version()}, **GS.header_fields('rules'))}
     total_steps = 0
     with gzip.open(out_path, 'wt', encoding='utf-8', compresslevel=6, newline='\n') as f:
         f.write(json.dumps(header, ensure_ascii=False, separators=(',', ':')) + '\n')

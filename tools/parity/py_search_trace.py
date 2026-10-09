@@ -43,8 +43,9 @@ from core.card import Card  # noqa: E402
 from core.game_state import GameState  # noqa: E402
 from core.player import Player  # noqa: E402
 import py_rules_trace as R  # noqa: E402
+import golden_sources as GS  # noqa: E402
 
-GENERATOR_VERSION = 'py_search_trace/1'
+GENERATOR_VERSION = 'py_search_trace/2'  # 2: header binds the source (M4-2)
 INF = float('inf')
 
 
@@ -333,8 +334,8 @@ def tt_family(rng, db, index):
 def generate(kind, out_path, seed, count):
     db = R.load_db_rows()
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    header = {'header': {'generator': GENERATOR_VERSION, 'kind': kind, 'seed': seed, 'count': count,
-                         'python': platform.python_version()}}
+    header = {'header': dict({'generator': GENERATOR_VERSION, 'kind': kind, 'seed': seed, 'count': count,
+                              'python': platform.python_version()}, **GS.header_fields('search'))}
     t0 = time.time()
     with gzip.open(out_path, 'wt', encoding='utf-8', compresslevel=6, newline='\n') as f:
         def emit(obj):
