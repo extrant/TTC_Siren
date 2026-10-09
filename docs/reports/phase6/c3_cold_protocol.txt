@@ -7,3 +7,12 @@ Four repetitions, order alternated (P = predecessor, C = candidate):
   rep4  C 0.04630 (6.5%)           P 0.04549 (25.5%)   C vs P  +1.8%
 Median of the four medians: P 0.04440, C 0.04536  (+2.2%). The sign of the difference changes between repetitions; the predecessor's own medians
 move by 16% (0.0423 .. 0.0489) while the candidate's move by 3% (0.0452 .. 0.0463). No repeatable regression above 3%.
+
+Strict-reading trial (C3 reverted, tree = C1 + C4a + C7) against the original build, goal protocol (run_cs_pinned.py --modes search --runs 7 --cold --affinity auto, order alternated, 4 repetitions):
+  rep1  O 0.04451 (spread 35.5%)  N 0.04857 (5.7%)   N vs O  +9.1%
+  rep2  N 0.04883 (7.3%)          O 0.04894 (25.6%)  N vs O  -0.2%
+  rep3  O 0.04364 (22.1%)         N 0.04897 (8.5%)   N vs O  +12.2%
+  rep4  N 0.04900 (8.6%)          O 0.04902 (23.5%)  N vs O  -0.0%
+The original build is bimodal (0.044 s or 0.049 s); the tree without C3 always sits in the slow mode (0.0486-0.0490). Median of medians: O 0.04673, N 0.04890 (+4.6%).
+Reverting C3 therefore does not give a clean cold result either (the tree is at the slow mode of the original in every repetition and above it in two), while with C3 the
+cold suite is 0.0452-0.0463 (see above). The revert was undone (the revert commit is itself reverted), leaving C3 in place.
