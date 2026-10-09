@@ -54,14 +54,39 @@ def run_exact(name):
     v = _solve_endgame_exact(s, s.current_player_idx, cache)
     return dict(scenario=name, make_moves=n[0], cache=len(cache), sec=time.perf_counter() - t0, score=v)
 
+def repeated(fn, runs):
+    """Runs fn() `runs` times; the returned record keeps the last run's data, with `sec` = the median and the spread
+    in `sec_min` / `sec_max` (review L5-3: a min/median/max printout exposes outliers). runs=1 is the old behaviour."""
+    secs = []
+    rec = None
+    for _ in range(runs):
+        rec = fn()
+        secs.append(rec['sec'])
+    secs.sort()
+    rec['sec'] = secs[len(secs) // 2]
+    rec['sec_min'] = secs[0]
+    rec['sec_max'] = secs[-1]
+    rec['runs'] = runs
+    return rec
+
 if __name__ == '__main__':
+    import pin  # tools/bench/pin.py
+    print('# python=%s affinity=%s cpus=%s' % (sys.version.split()[0], pin.describe(pin.current_affinity()), os.cpu_count()), flush=True)
+    # usage: py_bench.py <repo_root> [fixed|exact|server|all] [runs=1]
     which = sys.argv[2] if len(sys.argv) > 2 else 'all'
+    runs = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     if which in ('all', 'fixed'):
+        run_fixed_depth('end5_same_plus', 1)  # untimed: the first call loads the card database lazily
+        tot = {'nodes': 0, 'sec_min': 0.0, 'sec_median': 0.0, 'sec_max': 0.0}
         for name, depths in [('open_none',[1,2,3,4]), ('open_same_plus',[1,2,3,4]), ('mid3_ascension',[1,2,3,4,5]),
                              ('mid4_rev_ace',[1,2,3,4,5]), ('end5_same_plus',[1,2,3,4])]:
-            for d in depths: print(json.dumps(run_fixed_depth(name, d), ensure_ascii=False), flush=True)
+            for d in depths:
+                rec = repeated(lambda: run_fixed_depth(name, d), runs)
+                tot['nodes'] += rec['nodes']; tot['sec_min'] += rec['sec_min']; tot['sec_median'] += rec['sec']; tot['sec_max'] += rec['sec_max']
+                print(json.dumps(rec, ensure_ascii=False), flush=True)
+        print(json.dumps(dict(summary='fixed', runs=runs, **tot)), flush=True)  # sums of per-item min / median / max
     if which in ('all', 'exact'):
-        for name in ['end5_same_plus', 'mid4_rev_ace']: print(json.dumps(run_exact(name)), flush=True)
+        for name in ['end5_same_plus', 'mid4_rev_ace']: print(json.dumps(repeated(lambda: run_exact(name), runs)), flush=True)
     if which in ('all', 'server'):
         for name in ['open_none', 'open_same_plus', 'mid3_ascension']:
             print(json.dumps(run_server_like(name), ensure_ascii=False), flush=True)

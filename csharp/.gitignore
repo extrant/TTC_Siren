@@ -2,3 +2,6 @@ bin/
 obj/
 *.user
 TestResults/
+
+# Visual Studio local state (not part of the project)
+.vs/
