@@ -14,6 +14,13 @@ public enum EvalMode : byte
 
     /// <summary><c>evaluate_state(..., aggressive=True)</c>.</summary>
     HeuristicAggressive = 1,
+
+    /// <summary>
+    /// Exact endgame value (Phase 5, <c>_solve_endgame_exact</c>): the AI side's card count minus the opponent's at
+    /// the end of the game, an integer. Never share a table generation with a heuristic mode: the scores are of a
+    /// different kind.
+    /// </summary>
+    ExactCardDifference = 2,
 }
 
 /// <summary>
