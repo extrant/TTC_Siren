@@ -1,7 +1,7 @@
 # Phase 6 — profiler-driven single-thread optimisation (2026-10-09/10)
 
 Scope: `.claude/phase6_goal.md` step C. Single thread only: no `unsafe`, no SIMD, no multithreading, no root parallelism, no change
-of any search or rule semantics. Every kept change is its own local commit (not pushed).
+of any search or rule semantics. Every kept change is its own local commit (not pushed). C3 was reverted once and re-applied after a re-measurement (`6b61630`, `17c07c7`, `290b15e`, see §5).
 
 **All timings in this report are pinned to the P-core set `0xFFF`** (i7-13650HX, logical processors 0–11; both Python and C#),
 measured with `tools/bench/run_cs_pinned.py` (C# only, independent process runs, min/median/max) and
@@ -52,7 +52,7 @@ Keep rule: a repeatable improvement of at least 3% on the targeted workload and 
 |---|---|---|---|
 | **C1** `3a77dbe` | `RecalculateTypeModifiers`: one pass over the instance table instead of a board count plus, per present type, a board scan and two hand scans (every instance is on the board or in a hand, so the same cards are touched once each; order is irrelevant: XOR hash, per-card display refresh; all present types are still re-applied on every typed placement, D-017, and display edges still refresh and are not restored by undo, D-003) | warm: exact `mid3_ascension` 0.0645 → 0.0431 s (**−33%**), Fast 1.438 → 1.298 s (−9.7%), robust pipeline −6.3%, make/undo with type rules **−43..−48%**; cold: exact mid3 −37%, Fast −12%; non-type scenarios ±4% (same code path, noise) | **kept** |
 | C2 | snapshot/restore of the 19 modifiers with `Span.CopyTo` | vs a stored file: mid3 exact +4.9%, but vs a fresh base in the same window −8.9%, Fast −1.7%/+1.0%, search −0.7%: the sign flips with the baseline run | reverted (no repeatable 3%) |
-| **C3** `6b61630` | table-driven `PlacementEdgeScore`: terms per effective value 1..10 for exposed/hidden edges and the exposed sides per cell are tables, replacing a `switch` and compare chains with hard-to-predict branches. All terms are multiples of 0.5, so the sums are exact in any order: bit-identical (1.6M `evaluate_move` + 400k `evaluate_state` golden checks) | warm: compat suite 0.02395 → 0.01909 s (**−20%**), Fast 1.328 → 1.073 s (**−19%**), compat TT-on/off −14%/−16%; exact/robust/make-undo unchanged (±3%). Cold: Fast −18%, 21 of 22 fixed-depth items 10–35% faster, **but the 22-item cold total is not better** (see §5) | **kept** (with the cold caveat) |
+| **C3** `6b61630` / re-applied `290b15e` | table-driven `PlacementEdgeScore`: terms per effective value 1..10 for exposed/hidden edges and the exposed sides per cell are tables, replacing a `switch` and compare chains with hard-to-predict branches. All terms are multiples of 0.5, so the sums are exact in any order: bit-identical (1.6M `evaluate_move` + 400k `evaluate_state` golden checks) | warm: compat suite 0.02395 → 0.01909 s (**−20%**), Fast 1.328 → 1.073 s (**−19%**), compat TT-on/off −14%/−16%; exact/robust/make-undo unchanged (±3%). Cold, alternating-build sampling (§5): 22-item suite 0.0445 → 0.0412 s (−7.5%), Fast −28%, no cold regression | **kept** |
 | **C4a** `2c226bb` | `EvaluateMove` walks the board's precomputed neighbour table (new `GameState.NeighborCount/Cell/MySide/OppSide`) instead of computing offsets and bounds in two loops; the accumulation order is unchanged | warm: compat suite −6.8% / −5.8% (two runs), TT-on/off −3.3..−4.0%, Fast −2.4..−2.8%; others unchanged | **kept** |
 | C5a | `EvaluateState`: per-cell weight table and `PlacementEdgeScoreAt(inst, cell)` (no row/col arithmetic) | compat +4.0%, TT-on −1.0%, TT-off −0.3%, Fast +0.4% | reverted (no gain) |
 | C6 | `stackalloc double[n]` instead of `[MaxMoves]` for the order scores (less zeroing per node; the no-`unsafe` substitute for `SkipLocalsInit`) | compat −0.7%, TT-on −2.6%, TT-off −1.4%, Fast −1.7% | reverted (< 3%) |
@@ -89,10 +89,12 @@ Cold (`--cold`):
 
 | workload | original | final | change |
 |---|---|---|---|
-| ReferenceCompat 22 items (total) | 0.03621 s | 0.04511 s | **+24.6%** — see §5 |
+| ReferenceCompat 22 items (total) | 0.03621 s | 0.04511 s | +24.6% in this **block-order** run — an ordering artifact, see §5; with alternating builds (25 samples) 0.04450 → 0.04116 s, **−7.5%** |
 | Fast d≥4 totals | 2.315 / 2.212 / 1.441 s | 1.820 / 1.696 / 1.054 s | −21.4% / −23.3% / −26.8% |
 | Exact `mid3_ascension` | 0.06821 s | 0.04503 s | −34.0% |
-| Robust pipeline | 0.07927 s | 0.07851 s | −1.0% (this run; an earlier run of the same build measured 0.0660 s vs 0.0825 s for its base, −20%: cold values of this workload move between two modes) |
+| Robust pipeline | 0.07927 s | 0.07851 s | −1.0% in this block-order run; alternating builds (15 samples): 0.08187 → 0.06325 s (**−22.7%**) |
+
+Cold, **alternating builds** (`tools/bench/ab_interleaved.py`, original / final, `docs/reports/phase6/ab_interleaved_cold_*.txt`): ReferenceCompat 22 items median 0.04450 → 0.04116 s (−7.5%, 25 samples); Fast 1.4006 → 1.0087 s (−28%, 7); exact `mid3_ascension` 0.0640 → 0.0421 s (−34%, 7); robust pipeline 0.08187 → 0.06325 s (−23%, 15).
 
 **Python vs C#, interleaved, 3 rounds, `0xFFF` on both sides** (CPython 3.11.4; `final_interleaved_*.txt`), min / median / max, against the baseline of §1:
 
@@ -107,14 +109,14 @@ of these runs are the same as in the baseline (exact `mid3_ascension` 10.8–11.
 
 ## 5. Caveats and one judgement call
 
-- **Cold 22-item suite (C3).** In the default (tiered) JIT the 22-item cold total is +25% with the final build (median 0.0451 vs 0.0362 s; 25 runs of the C3 build: median
-  0.0500 vs 0.0363). The per-item table (`Bench --cold search`) shows 21 of the 22 items 10–35% **faster** in the same cold process; the whole difference is one item,
-  `open_none` d4 (15,807 nodes), whose median over the five timed runs depends on when the background tier-1 compilation lands: 31.7 ms vs 21.3 ms with a minimum of 8.3 vs 9.3 ms.
-  With `DOTNET_TieredCompilation=0` (everything optimised at the first call) the same suite is **15% faster** (0.02786 → 0.02352 s). Static-vs-instance tables, an unrolled body and
-  `AggressiveOptimization` on the method were tried; none removed the tier-up effect. The keep rule asks for "no regression above 3% elsewhere" and this cold small-suite number does
-  not meet it. The change was kept because every steady-state and long-running workload (warm −20%, Fast cold −18%) improves and the cold regression is a tier-up timing window of a
-  40 ms measurement, not slower code. **This deviation from the literal rule is for the reviewer/user to confirm or overrule** (reverting C3 alone restores the cold figure and costs the warm gain).
-- Cold figures are bimodal (JIT timing); read them as ranges. The cold robust-pipeline gain of C7 was −20% in one run and −1% in another.
+- **Cold 22-item suite — an ordering artifact, resolved (C3).** Comparing builds in blocks (all runs of A, then all runs of B) made the final build look 25% slower on the cold
+  22-item suite and made C3 look responsible; I first kept C3 anyway and flagged it as a deviation from the keep rule. The Stop-hook check rightly pointed out that the rule is not mine to relax,
+  so C3 was reverted (`17c07c7`) and the cold suite re-measured with the builds **alternating sample by sample** (A, B, C, A, B, C, …; 25 samples each,
+  `tools/bench/ab_interleaved.py`): original median 0.0431 s, build with C3 (`c6d3115`) 0.0423 s, build **without** C3 0.0500 s (+16%). Cold-JIT timings are bimodal and depend on
+  when tier-1 code arrives, and the machine drifts, so a block order can produce or hide a ±20% effect; with alternating builds the final tree is 0.04450 → 0.04116 s (−7.5%, p25–p75
+  0.0409–0.0415 s vs 0.0418–0.0498 s for the original). So C3 satisfies the keep rule (no cold regression; reverting it makes cold worse) and was re-applied as `290b15e` (identical code to the
+  earlier commit `6b61630`; both commits stay in the local history). The block-order figures in the tables above are kept as measured and labelled.
+- Cold figures are bimodal (JIT timing); read them as ranges and compare builds only with alternating samples (`ab_interleaved.py`). Block-order cold comparisons in this report (e.g. robust pipeline −1% in the first cold table) disagree with the alternating ones (−23%) for that reason.
 - Short items (µs) are timer-limited; `exact end5_same_plus` / `mid4_rev_ace` changes of ±10% are noise.
 - Everything is versus CPython 3.11.4 (Q-6); PyPy is unmeasured.
 

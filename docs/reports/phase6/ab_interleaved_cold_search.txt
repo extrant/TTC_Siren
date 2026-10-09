@@ -1,0 +1,3 @@
+# search cold, 25 alternating samples, affinity 0xFFF
+orig               n=25 min 0.03543 p25 0.04183 median 0.04450 p75 0.04981 max 0.05219 s
+final              n=25 min 0.04038 p25 0.04088 median 0.04116 p75 0.04154 max 0.04285 s

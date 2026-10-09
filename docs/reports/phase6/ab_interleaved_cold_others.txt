@@ -1,0 +1,9 @@
+# endgame cold, 15 alternating samples, affinity 0xFFF
+orig               n=15 min 0.08001 p25 0.08173 median 0.08187 p75 0.08206 max 0.08252 s
+final              n=15 min 0.05999 p25 0.06180 median 0.06325 p75 0.06433 max 0.07193 s
+# fast cold, 7 alternating samples, affinity 0xFFF
+orig               n=7 min 1.37682 p25 1.39057 median 1.40061 p75 1.40966 max 1.41952 s
+final              n=7 min 1.00347 p25 1.00595 median 1.00867 p75 1.01015 max 1.01161 s
+# exact cold, 7 alternating samples, affinity 0xFFF
+orig               n=7 min 0.06233 p25 0.06333 median 0.06400 p75 0.06572 max 0.06613 s
+final              n=7 min 0.03960 p25 0.04033 median 0.04206 p75 0.04393 max 0.04581 s
