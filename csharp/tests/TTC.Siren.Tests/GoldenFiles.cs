@@ -89,6 +89,48 @@ internal static class GoldenFiles
         return path;
     }
 
+    // ------------------------------------------------------------------ Phase 7 end-to-end reference
+
+    public const int E2eSeed = 20261010;
+    public const int E2eCount = 360;
+    public const string E2eGeneratorVersion = "phase7_e2e_reference/1";
+
+    public static string E2eCorpusPath => Path.Combine(RepoRoot, "tools", "phase7", "corpus", $"corpus_s{E2eSeed}_n{E2eCount}.json");
+
+    /// <summary>
+    /// The Python reference of the end-to-end comparison (tools/phase7/e2e_reference.py): per corpus request what Python computes
+    /// and what the Python server sends to the engine. Generated on demand (several minutes) and bound to the Python source.
+    /// </summary>
+    public static string EnsureE2eReference()
+    {
+        string path = Path.Combine(GoldenDir, $"e2e_reference_g1_s{E2eSeed}_n{E2eCount}.jsonl.gz");
+        lock (Gate)
+        {
+            if (File.Exists(path) && StaleReason(path, "e2e") is null) return path;
+        }
+        // the corpus first (deterministic, a second), then the reference that reads it
+        Directory.CreateDirectory(Path.GetDirectoryName(E2eCorpusPath)!);
+        RunPython("tools/phase7/gen_corpus.py", "--out", E2eCorpusPath, "--seed", E2eSeed.ToString(), "--count", E2eCount.ToString());
+        Ensure(path, "--corpus @@CORPUS@@ --out {0}", "tools/phase7/e2e_reference.py", "e2e");
+        return path;
+    }
+
+    private static void RunPython(string script, params string[] args)
+    {
+        lock (Gate)
+        {
+            var psi = new ProcessStartInfo("python") { WorkingDirectory = RepoRoot, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            psi.Environment["PYTHONIOENCODING"] = "utf-8";
+            psi.ArgumentList.Add(script);
+            foreach (string a in args) psi.ArgumentList.Add(a);
+            using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Could not start python");
+            string stdout = proc.StandardOutput.ReadToEnd();
+            string stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+            if (proc.ExitCode != 0) throw new InvalidOperationException($"{script} failed (exit {proc.ExitCode}):{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+        }
+    }
+
     /// <summary>
     /// Review M4-2: the header of a golden file binds it to the Python source (SHA-256 of every file it depends on and
     /// the Python major.minor version). Null if the file matches the working tree, otherwise the reason it is stale.
@@ -140,9 +182,9 @@ internal static class GoldenFiles
             };
             psi.Environment["PYTHONIOENCODING"] = "utf-8";
             // Split the template first so a path containing spaces stays a single argument.
-            psi.ArgumentList.Add(Path.Combine("tools", "parity", script));
+            psi.ArgumentList.Add(script.Contains('/') ? script : Path.Combine("tools", "parity", script));
             foreach (string part in argsTemplate.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-                psi.ArgumentList.Add(part.Contains("{0}") ? tmp : part);
+                psi.ArgumentList.Add(part.Contains("{0}") ? tmp : part == "@@CORPUS@@" ? E2eCorpusPath : part);
 
             using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Could not start python");
             string stdout = proc.StandardOutput.ReadToEnd();

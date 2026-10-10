@@ -39,11 +39,18 @@ _ENDGAME = _SEARCH + [
     'tools/parity/py_endgame_trace.py',
 ]
 
+_E2E = _ENDGAME + [
+    'ai/csharp_engine.py',
+    'tools/phase7/gen_corpus.py',
+    'tools/phase7/e2e_reference.py',
+]
+
 KIND_PATTERNS = {
     'rules': _RULES,
     'carddb': _RULES,
     'search': _SEARCH,
     'endgame': _ENDGAME,
+    'e2e': _E2E,
 }
 
 

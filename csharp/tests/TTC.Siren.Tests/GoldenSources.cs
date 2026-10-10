@@ -28,11 +28,17 @@ internal static class GoldenSources
         "ai_server.py", "ai/unknown_card_handler.py", "config/unknown_card_config.py", "tools/parity/py_endgame_trace.py",
     }).ToArray();
 
+    private static readonly string[] E2ePatterns = EndgamePatterns.Concat(new[]
+    {
+        "ai/csharp_engine.py", "tools/phase7/gen_corpus.py", "tools/phase7/e2e_reference.py",
+    }).ToArray();
+
     private static string[] Patterns(string kind) => kind switch
     {
         "rules" or "carddb" => RulesPatterns,
         "search" => SearchPatterns,
         "endgame" => EndgamePatterns,
+        "e2e" => E2ePatterns,
         _ => throw new ArgumentException("unknown golden kind " + kind),
     };
 
