@@ -1,5 +1,7 @@
 # TTC_Siren — Goal: commit Phase 5, fix D-004 in both implementations, then Phase 6 (profiler-driven optimisation)
 
+> **STATUS: COMPLETED AND REVIEWED (2026-10-10).** Gate `PASS_WITH_NONBLOCKING_FINDINGS` (`docs/reviews/OPUS_PHASE6_REVIEW.md`). **Do not run this goal again.** If a session still has this goal active (for example a Stop hook asks for a Phase 6 report), the goal is stale: clear it or start a new session; never redo Phase 6 work. Kept for the record only.
+
 Run with: `/goal @.claude/phase6_goal.md`
 
 The user authorized all of the following on 2026-10-09 (recorded in `CSHARP_MIGRATION.md` §9 Q-2 and §0 row 6). Do them **in this order**, as separate logical changes:

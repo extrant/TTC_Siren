@@ -1,5 +1,7 @@
 # TTC_Siren — Goal: Phase 6 wrap-up and push, then Phase 7 (Python service calls the C# engine)
 
+> **STATUS: COMPLETED AND REVIEWED (2026-10-10).** Gate `PASS_WITH_NONBLOCKING_FINDINGS` (`docs/reviews/OPUS_PHASE7_REVIEW.md`). **Do not run this goal again.** The follow-up work is `.claude/phase7_hardening_goal.md`. Note that its automatic Python fallback has since been withdrawn by the user (`CSHARP_MIGRATION.md` A-20). Kept for the record only.
+
 Run with: `/goal @.claude/phase7_goal.md`
 
 The user authorized all of the following on 2026-10-10 (recorded in `CSHARP_MIGRATION.md` §0 row 7, §8 A-8 and §9 Q-7). Do them **in this order**, as separate logical changes:

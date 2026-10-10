@@ -1,5 +1,7 @@
 # TTC_Siren — Autonomous Migration Phase Goal
 
+> **STATUS: RETIRED (2026-10-10). Do not run this goal.** Phases are now authorized one by one through dedicated goal files (`.claude/phase6_goal.md`, `.claude/phase7_goal.md`, `.claude/phase7_hardening_goal.md`, …). Running this file would pick "the next unfinished phase" (Phase 8), which the user has **not** authorized. If you were started with this goal, stop and tell the user. Kept for the record only.
+
 Reusable goal for the Python → C# migration. Starting this goal is the user's authorization for exactly ONE phase: the next unfinished phase.
 
 ## 1. Start-up (mandatory, in this order)
