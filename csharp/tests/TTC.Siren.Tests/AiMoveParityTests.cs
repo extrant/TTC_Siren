@@ -29,14 +29,14 @@ public class AiMoveParityTests
             or "search_progress[].time_elapsed" or "search_progress[].time_remaining" or "search_progress[].nodes_per_second"
             or "search_summary.total_time_seconds" or "search_summary.search_efficiency";
 
-    internal static readonly string[] AdditiveKeys = { "solver_used", "solver_note", "explanation" };
+    internal static readonly string[] AdditiveKeys = { "solver_used", "solver_note", "explanation", "game_id" };
 
     internal static AiMoveService CreateService(int workers = 2, int ttEntries = TtEntries)
     {
         var db = CardDb.LoadFromRepository(AppContext.BaseDirectory);
         var catalog = new CardCatalog(db);
         var pool = new WorkerPool(workers, ttEntries, 1 << 15, 256, 60_000);
-        return new AiMoveService(catalog, new SolveService(db), pool);
+        return new AiMoveService(catalog, new SolveService(db), pool, null, ttEntries);
     }
 
     [Fact]

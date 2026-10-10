@@ -34,6 +34,15 @@ public sealed class ServerOptions
     /// </summary>
     public bool TestSeedHeader { get; set; }
 
+    /// <summary>Game logs (<c>Server:GameLog</c>): directory, retention, game-identity gap.</summary>
+    public GameLog.GameLogOptions GameLog { get; set; } = new();
+
+    /// <summary>How many live events a subscriber of <c>/v1/live</c> may fall behind before the oldest are dropped (a <c>lagged</c> notice follows).</summary>
+    public int LiveBuffer { get; set; } = Live.LiveHub.DefaultCapacity;
+
+    /// <summary>Directory with the explanation template file <c>explain.zh-CN.json</c> to use instead of the built-in one (null: built-in).</summary>
+    public string? TemplatesDirectory { get; set; }
+
     public static ServerOptions Parse(string[] args)
     {
         var mappings = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -68,6 +77,8 @@ public sealed class ServerOptions
         if (QueueWaitMs < 0) throw new ArgumentException("QueueWaitMs must not be negative");
         if (!System.Numerics.BitOperations.IsPow2(TtEntries) || TtEntries < 4) throw new ArgumentException("TtEntries must be a power of two >= 4");
         if (!System.Numerics.BitOperations.IsPow2(MemoEntries) || MemoEntries < 4) throw new ArgumentException("MemoEntries must be a power of two >= 4");
+        GameLog.Validate();
+        if (LiveBuffer < 1) throw new ArgumentException("LiveBuffer must be at least 1");
     }
 
     public IPAddress Address => IPAddress.Parse(Host);

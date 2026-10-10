@@ -5,6 +5,7 @@ using TTC.Siren.Core;
 using TTC.Siren.Engine;
 using TTC.Siren.Explain;
 using TTC.Siren.Search;
+using TTC.Siren.Server.GameLog;
 
 namespace TTC.Siren.Server;
 
@@ -20,6 +21,7 @@ public sealed class AiMoveOutcome
     public ExplanationFacts? Facts;
     public ExplanationText? Text;
     public string? ExplainLevel;
+    public int TtEntries;
 
     /// <summary>The "generated unknown card" flag of every hand card at parse time (before the analysis reorders the hands), per player, in request order.</summary>
     public bool[][]? Generated;
@@ -43,8 +45,11 @@ public sealed class AiMoveService
     private readonly LegacyAnalysis _analysis;
     private readonly TemplateSet _templates;
 
-    public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool, TemplateSet? templates = null)
+    private readonly int _ttEntries;
+
+    public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool, TemplateSet? templates = null, int ttEntries = 0)
     {
+        _ttEntries = ttEntries;
         _catalog = catalog;
         _solve = solve;
         _pool = pool;
@@ -73,9 +78,9 @@ public sealed class AiMoveService
     /// Handles one request. <paramref name="seed"/> seeds the unknown-card sampling (<see cref="PythonRandom"/>): production passes a fresh
     /// cryptographic seed and logs it, tests pass the seed Python was seeded with.
     /// </summary>
-    public async Task<AiMoveOutcome> HandleAsync(JsonElement data, ulong seed, CancellationToken ct)
+    public async Task<AiMoveOutcome> HandleAsync(JsonElement data, ulong seed, CancellationToken ct, IAiMoveObserver? observer = null)
     {
-        var outcome = new AiMoveOutcome { Seed = seed };
+        var outcome = new AiMoveOutcome { Seed = seed, TtEntries = _ttEntries };
         try
         {
             var rng = new PythonRandom(seed);
@@ -90,6 +95,7 @@ public sealed class AiMoveService
             var req = parse.Request;
             outcome.Parsed = req;
             outcome.Generated = req.State.Players.Select(p => p.Hand.Select(RequestParser.IsGeneratedUnknownCard).ToArray()).ToArray();
+            observer?.OnParsed(outcome);
 
             // max_depth / max_time as the Python client of the engine reads them (wire_max_depth, wire_max_time)
             if (!ReadNumber(data, "max_depth", 10, out var depthNumber, out string? depthError)) return Finish(outcome, EngineError("unsupported_parameter", depthError!, 400));
@@ -102,7 +108,7 @@ public sealed class AiMoveService
             outcome.ExplainLevel = explainLevel;
 
             var (result, engineError, solveRequest, facts, explainError, explainMs) =
-                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, ct).ConfigureAwait(false);
+                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, observer, ct).ConfigureAwait(false);
             if (engineError is not null) return Finish(outcome, engineError);
             outcome.Solve = result;
             outcome.Request = solveRequest;
@@ -329,7 +335,7 @@ public sealed class AiMoveService
     }
 
     private async Task<(SolveResult? Result, AiMoveOutcome? Error, SolveRequest? Request, ExplanationFacts? Facts, string? ExplainError, double ExplainMs)> RunEngineAsync(
-        RequestParser parser, ParsedRequest req, Num depth, Num time, string explainLevel, CancellationToken ct)
+        RequestParser parser, ParsedRequest req, Num depth, Num time, string explainLevel, IAiMoveObserver? observer, CancellationToken ct)
     {
         SolveRequest request;
         try
@@ -347,7 +353,7 @@ public sealed class AiMoveService
                 null, null, null, 0);
         try
         {
-            var result = _solve.Solve(request, worker);
+            var result = _solve.Solve(request, worker, observer is null ? null : observer.OnDepth, observer is null ? null : observer.OnRobust);
             if (result.Status == SolveResult.NeedsFallbackCandidates)
             {
                 // Python's legal enumeration of the unknown cards was empty: the random fallback candidates of the handler are drawn now,
@@ -357,7 +363,7 @@ public sealed class AiMoveService
                 var knownOpp = oppHand.Where(c => !RequestParser.IsGeneratedUnknownCard(c)).ToList();
                 var candidates = parser.Handler.GenerateOpponentCards(unknown, req.Rules, new HashSet<int>(req.UsedCards), req.Board, knownOpp, req.OppOwner, true);
                 request = RequestReader.Parse(BuildPayload(req, depth, time, candidates));
-                result = _solve.Solve(request, worker);
+                result = _solve.Solve(request, worker, observer is null ? null : observer.OnDepth, observer is null ? null : observer.OnRobust);
                 if (result.Status != SolveResult.Ok) return (null, EngineError("unexpected_status", result.Status, 503), null, null, null, 0);
             }
 

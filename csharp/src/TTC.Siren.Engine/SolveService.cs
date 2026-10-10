@@ -75,7 +75,12 @@ public sealed class SolveService
 
     public SolveService(CardDb db) => _db = db;
 
-    public SolveResult Solve(SolveRequest req, WorkerContext worker)
+    /// <summary>
+    /// <paramref name="onDepth"/> (live progress) is called once per completed search depth with that depth's numbers, on the search thread, so it must
+    /// return quickly; <paramref name="onRobust"/> is called with (scenarios done, scenarios total) when the robust endgame starts (0, total) and when
+    /// it has finished (total, total). Both observe only: the result is the same with or without them.
+    /// </summary>
+    public SolveResult Solve(SolveRequest req, WorkerContext worker, Action<DepthOut>? onDepth = null, Action<int, int>? onRobust = null)
     {
         long t0 = Stopwatch.GetTimestamp();
         var result = new SolveResult { RequestId = req.RequestId, WorkerId = worker.Id };
@@ -129,7 +134,22 @@ public sealed class SolveService
         // 2. Standard search: Fast iterative deepening.
         result.RootMoves = CountRootMoves(searchState);
         var searcher = new FastSearcher(searchState, _db, worker.Tt);
-        var found = searcher.RunIterativeDeepening(req.MaxDepth, req.Aggressive, new SearchLimits(req.MaxTime));
+        Action<LevelProgress>? levelCallback = null;
+        if (onDepth is not null)
+        {
+            levelCallback = p => onDepth(new DepthOut
+            {
+                Depth = p.Depth,
+                Move = p.BestInstance < 0 ? null : new MoveOut(slotOfInst[p.BestInstance], p.BestCell / 3, p.BestCell % 3, searchState.InstanceId(p.BestInstance)),
+                Score = p.Score,
+                Nodes = 0,
+                NodesTotal = p.NodesTotal,
+                TtHitsTotal = p.TtHitsTotal,
+                CutoffsTotal = p.CutoffsTotal,
+                ElapsedSeconds = Stopwatch.GetElapsedTime(0, p.ElapsedTimestampTicks).TotalSeconds,
+            });
+        }
+        var found = searcher.RunIterativeDeepening(req.MaxDepth, req.Aggressive, new SearchLimits(req.MaxTime), onLevel: levelCallback);
         var stats = searcher.Stats;
         long t2 = Stopwatch.GetTimestamp();
         result.SearchMs = Ms(t1, t2);
@@ -172,6 +192,7 @@ public sealed class SolveService
         if (robustState is not null)
         {
             var r = req.Robust!;
+            onRobust?.Invoke(0, scenarios!.Count);
             var sel = EndgameRobust.Select(_db, robustState, scenarios!, robustState.CurrentPlayer, req.Aggressive, worker.Memo);
             var robust = new RobustOut { Scenarios = scenarios!.Count, ExactNodes = sel.ExactNodes, ExactMakeMoves = sel.ExactMakeMoves };
             var items = new List<OverrideItem>(sel.Scored.Count);
@@ -198,6 +219,7 @@ public sealed class SolveService
                 result.Final = Out(robustState, sel.Best);
             }
             result.Robust = robust;
+            onRobust?.Invoke(scenarios!.Count, scenarios.Count);
             long t3 = Stopwatch.GetTimestamp();
             robust.ElapsedSeconds = Stopwatch.GetElapsedTime(t2, t3).TotalSeconds;
             result.RobustMs = Ms(t2, t3);

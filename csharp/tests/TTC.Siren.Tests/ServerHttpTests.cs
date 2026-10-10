@@ -10,11 +10,28 @@ namespace TTC.Siren.Tests;
 /// The HTTP surface of the product server (a real socket, the production code path): the plugin contract of API.md — POST /ai_move with
 /// the plugin's JSON, the answer in the form of Flask's jsonify — plus the production seeding rule and the test-only seed header.
 /// </summary>
-public class ServerHttpTests
+public class ServerHttpTests : IDisposable
 {
+    private static readonly string LogDir = Path.Combine(Path.GetTempPath(), "ttc-http-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(LogDir)) Directory.Delete(LogDir, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
     private static async Task<ServerHost> StartAsync(bool testSeedHeader)
     {
-        var options = new ServerOptions { Host = "127.0.0.1", Port = 0, Workers = 2, TtEntries = AiMoveParityTests.TtEntries, TestSeedHeader = testSeedHeader };
+        var options = new ServerOptions
+        {
+            Host = "127.0.0.1", Port = 0, Workers = 2, TtEntries = AiMoveParityTests.TtEntries, TestSeedHeader = testSeedHeader,
+            GameLog = new TTC.Siren.Server.GameLog.GameLogOptions { Directory = LogDir },
+        };
         var host = ServerHost.Create(options);
         await host.StartAsync();
         return host;

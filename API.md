@@ -538,3 +538,26 @@ HTTP 状态码：
 | 玩家可用牌 < 5 张 | `/api/recommend` 返回空 results + process 说明 |
 | NPC 已知牌 < 5 张 | `/api/recommend` 返回空 results + process 说明 |
 | 无合法卡组 | `/api/draft/analyze` 返回空 results + process 说明 |
+
+---
+
+## 5. Phase 8A 新增（云端服务器；全部为追加，旧插件无需改动）
+
+### 5.1 `/ai_move` 的新请求参数与响应字段
+
+| 位置 | 字段 | 说明 |
+|---|---|---|
+| 请求 | `gameId` | 可选。字符串，`[A-Za-z0-9_-]`，1–64 位。同一局的所有请求带同一个 id，服务器就把它们归为一局（对局日志、实时事件、复盘用）。不带时服务器按"后继局面"自动推断（同密钥、同规则与颜色、轮到同一方、棋盘上原有的牌都在原位、间隔不超过 15 分钟）；无效的 id 被忽略 |
+| 请求 | `explain` | 可选。`"brief"`（默认）或 `"full"`（额外给出备选走法的评分与劣势原因） |
+| 响应 | `explanation` | `{version: 2, level, language, facts: [...], text: {brief, full}}`。`facts` 是可复算的结构化事实（立即效果与翻牌原因、暴露与威胁、对手最强回应、主变例与预期结果、备选走法、残局信息集、未知牌假设、可信度）；`text.brief` 是一两句话，`text.full` 是分段详述，文字只陈述事实里有的内容。字段说明见 `docs/design/EXPLANATION_FACTS.md`。生成失败时改为 `explanation_error`（走法不受影响） |
+| 响应 | `game_id` | 本次请求归属的对局 id |
+| 响应 | `engine_info.timings.explainMs` | 生成解释用时 |
+
+### 5.2 对局日志
+
+`GET /v1/games?offset=&limit=`（列表）、`GET /v1/games/{id}`（JSON：全部记录）、`GET /v1/games/{id}/download`（JSON Lines 下载）、`DELETE /v1/games/{id}`。每个密钥只能看到自己的对局（别人的对局返回 404）。记录格式见 `docs/design/GAME_LOG_SCHEMA.md`；默认保留 30 天。
+
+### 5.3 实时事件流
+
+`GET /v1/live[?game_id=<id>]`，Server-Sent Events，只推送该密钥自己的事件：`request.received`（收到请求，含局面）、`search.depth`（每完成一层：深度、评分、最佳走法、节点数、用时）、`robust.progress`（残局信息集开始/结束）、`decision`（走法与简要解释）、`game.updated`（写入日志的记录）、`game.ended`。落后的客户端会丢弃最旧的事件并收到 `lagged` 通知（含丢弃数量），服务器不会因慢客户端而变慢。每 15 秒有一条心跳注释。
+
