@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using TTC.Siren.Search;
 
 namespace TTC.Siren.Engine;
@@ -36,41 +37,93 @@ public enum BusyReason
 }
 
 /// <summary>
+/// The estimated cost of a request, used to order the wait queue (review O8-1): a cheap request (a few empty cells, or the robust endgame) must not
+/// wait behind a dozen openings that take seconds each.
+/// </summary>
+public static class RequestClass
+{
+    public const int Cheap = 0;
+    public const int Medium = 1;
+    public const int Expensive = 2;
+
+    /// <summary>Openings and the first moves are expensive, mid-games medium, endgames cheap.</summary>
+    public static int Estimate(int emptyCells, bool robustEndgame) =>
+        robustEndgame || emptyCells <= 5 ? Cheap : emptyCells <= 7 ? Medium : Expensive;
+}
+
+/// <summary>The outcome of waiting for a worker.</summary>
+public readonly record struct AcquireResult(WorkerContext? Worker, BusyReason Reason, double WaitedMs);
+
+/// <summary>
 /// A fixed number of worker contexts and a bounded wait queue: at most <c>workers</c> searches run at once, at most
 /// <c>queueLimit</c> requests wait for a worker, and a request waits at most <c>queueWaitMs</c>. Contexts are created on
 /// first use (a table is 96 MiB by default, so an idle engine stays small).
 /// A queued request whose caller has gone away (<c>ct</c> cancelled: the HTTP connection was aborted) is dropped when its turn
 /// comes, without a search (review M7-1). A search that is already running is never interrupted, and nothing is checked inside it.
+///
+/// Scheduling (review O8-1). A freed worker goes to the waiting request with the smallest EFFECTIVE class, ties broken by arrival order
+/// (FIFO within a class). The effective class is the request's <see cref="RequestClass"/> lowered by one for every <c>agingMs</c> it has
+/// waited, down to <see cref="RequestClass.Cheap"/>: so cheap requests overtake expensive ones, but an expensive request that has waited
+/// <c>2 * agingMs</c> is as good as a cheap one and then goes strictly by arrival: it is overtaken only by requests that arrived before it.
+/// The wait of a request is therefore bounded by <c>2 * agingMs</c> plus the time the requests that arrived earlier need (and by
+/// <c>queueWaitMs</c>, after which it is answered "busy"). With every request of the same class the order is plain FIFO.
 /// </summary>
 public sealed class WorkerPool
 {
-    private readonly int _workers, _ttEntries, _memoEntries, _queueLimit, _queueWaitMs;
-    private readonly SemaphoreSlim _free;
+    private sealed class Waiter
+    {
+        public required int Rank;
+        public required long Seq;
+        public required long ArrivedTimestamp;
+        public readonly TaskCompletionSource Granted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsGranted;
+    }
+
+    private readonly int _workers, _ttEntries, _memoEntries, _queueLimit, _queueWaitMs, _agingMs;
+    private readonly object _lock = new();
+    private readonly List<Waiter> _queue = new();
     private readonly ConcurrentQueue<WorkerContext> _idle = new();
+    private int _freePermits;
     private int _created;
-    private int _waiting;
+    private long _seq;
     private long _busyAnswers;
     private long _abandoned;
     private long _served;
 
-    public WorkerPool(int workers, int ttEntries, int memoEntries, int queueLimit, int queueWaitMs)
+    public WorkerPool(int workers, int ttEntries, int memoEntries, int queueLimit, int queueWaitMs, int agingMs = 2000)
     {
+        if (agingMs < 1) throw new ArgumentOutOfRangeException(nameof(agingMs));
         _workers = workers;
         _ttEntries = ttEntries;
         _memoEntries = memoEntries;
         _queueLimit = queueLimit;
         _queueWaitMs = queueWaitMs;
-        _free = new SemaphoreSlim(workers, workers);
+        _agingMs = agingMs;
+        _freePermits = workers;
     }
 
     public int Workers => _workers;
     public int QueueLimit => _queueLimit;
     public int QueueWaitMs => _queueWaitMs;
+    public int AgingMs => _agingMs;
     public int Created => Volatile.Read(ref _created);
-    public int Waiting => Volatile.Read(ref _waiting);
+
+    public int Waiting
+    {
+        get
+        {
+            lock (_lock) return _queue.Count;
+        }
+    }
 
     /// <summary>Contexts not currently leased (including those not created yet).</summary>
-    public int Idle => _free.CurrentCount;
+    public int Idle
+    {
+        get
+        {
+            lock (_lock) return _freePermits;
+        }
+    }
 
     public long BusyAnswers => Interlocked.Read(ref _busyAnswers);
 
@@ -82,39 +135,69 @@ public sealed class WorkerPool
 
     public long MemoryBytes => (long)Created * (_ttEntries + (long)_memoEntries) * FastTranspositionTable.EntryBytes;
 
-    /// <summary>
-    /// Leases a worker, waiting in the bounded queue if all are busy. <c>null</c> + reason when it answers "busy", or when the
-    /// caller has gone away (<see cref="BusyReason.Abandoned"/>: <paramref name="ct"/> was cancelled while queued or just as the
-    /// worker became free; the worker is handed on untouched and nothing is searched).
-    /// </summary>
+    /// <summary>Leases a worker with the default class (<see cref="RequestClass.Medium"/>): plain FIFO among equals.</summary>
     public async Task<(WorkerContext? Worker, BusyReason Reason)> AcquireAsync(CancellationToken ct)
     {
-        if (!_free.Wait(0))
+        var r = await AcquireAsync(ct, RequestClass.Medium).ConfigureAwait(false);
+        return (r.Worker, r.Reason);
+    }
+
+    /// <summary>
+    /// Leases a worker, waiting in the bounded queue if all are busy. The worker is <c>null</c> + reason when it answers "busy", or when the
+    /// caller has gone away (<see cref="BusyReason.Abandoned"/>: <paramref name="ct"/> was cancelled while queued or just as the
+    /// worker became free; the worker is handed on untouched and nothing is searched). <see cref="AcquireResult.WaitedMs"/> is the time spent queued.
+    /// </summary>
+    public async Task<AcquireResult> AcquireAsync(CancellationToken ct, int requestClass)
+    {
+        long arrived = Stopwatch.GetTimestamp();
+        Waiter? waiter = null;
+        lock (_lock)
         {
-            if (Interlocked.Increment(ref _waiting) > _queueLimit)
+            if (_freePermits > 0)
             {
-                Interlocked.Decrement(ref _waiting);
-                Interlocked.Increment(ref _busyAnswers);
-                return (null, BusyReason.QueueFull);
+                _freePermits--;
             }
-            bool got;
+            else if (_queue.Count >= _queueLimit)
+            {
+                Interlocked.Increment(ref _busyAnswers);
+                return new AcquireResult(null, BusyReason.QueueFull, 0);
+            }
+            else
+            {
+                waiter = new Waiter { Rank = Math.Clamp(requestClass, RequestClass.Cheap, RequestClass.Expensive), Seq = ++_seq, ArrivedTimestamp = arrived };
+                _queue.Add(waiter);
+            }
+        }
+
+        if (waiter is not null)
+        {
             try
             {
-                got = await _free.WaitAsync(_queueWaitMs, ct).ConfigureAwait(false);
+                await waiter.Granted.Task.WaitAsync(TimeSpan.FromMilliseconds(_queueWaitMs), ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (Exception e) when (e is OperationCanceledException or TimeoutException)
             {
-                Interlocked.Increment(ref _abandoned);
-                return (null, BusyReason.Abandoned);
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _waiting);
-            }
-            if (!got)
-            {
-                Interlocked.Increment(ref _busyAnswers);
-                return (null, BusyReason.QueueTimeout);
+                lock (_lock)
+                {
+                    if (!waiter.IsGranted)
+                    {
+                        _queue.Remove(waiter);
+                        if (e is TimeoutException)
+                        {
+                            Interlocked.Increment(ref _busyAnswers);
+                            return new AcquireResult(null, BusyReason.QueueTimeout, Stopwatch.GetElapsedTime(arrived).TotalMilliseconds);
+                        }
+                        Interlocked.Increment(ref _abandoned);
+                        return new AcquireResult(null, BusyReason.Abandoned, Stopwatch.GetElapsedTime(arrived).TotalMilliseconds);
+                    }
+                }
+                // granted at the very moment the wait ended: a timed-out caller simply takes the worker; a cancelled one gives it back
+                if (e is OperationCanceledException)
+                {
+                    Interlocked.Increment(ref _abandoned);
+                    GiveBack();
+                    return new AcquireResult(null, BusyReason.Abandoned, Stopwatch.GetElapsedTime(arrived).TotalMilliseconds);
+                }
             }
         }
 
@@ -122,20 +205,21 @@ public sealed class WorkerPool
         {
             // the caller left while it waited and a worker has just become free (or was free all along): give the permit back
             Interlocked.Increment(ref _abandoned);
-            _free.Release();
-            return (null, BusyReason.Abandoned);
+            GiveBack();
+            return new AcquireResult(null, BusyReason.Abandoned, Stopwatch.GetElapsedTime(arrived).TotalMilliseconds);
         }
 
-        if (_idle.TryDequeue(out var worker)) return (worker, BusyReason.None);
-        int id = Interlocked.Increment(ref _created) - 1; // the semaphore guarantees id < workers
+        double waited = Stopwatch.GetElapsedTime(arrived).TotalMilliseconds;
+        if (_idle.TryDequeue(out var worker)) return new AcquireResult(worker, BusyReason.None, waited);
+        int id = Interlocked.Increment(ref _created) - 1; // the permit guarantees id < workers
         try
         {
-            return (new WorkerContext(id, _ttEntries, _memoEntries), BusyReason.None);
+            return new AcquireResult(new WorkerContext(id, _ttEntries, _memoEntries), BusyReason.None, waited);
         }
         catch
         {
             Interlocked.Decrement(ref _created);
-            _free.Release(); // do not leak the permit if the tables cannot be allocated
+            GiveBack(); // do not leak the permit if the tables cannot be allocated
             throw;
         }
     }
@@ -145,6 +229,41 @@ public sealed class WorkerPool
         worker.RequestsServed++;
         Interlocked.Increment(ref _served);
         _idle.Enqueue(worker);
-        _free.Release();
+        GiveBack();
+    }
+
+    /// <summary>Returns a permit: it goes to the best waiting request, or becomes free.</summary>
+    private void GiveBack()
+    {
+        lock (_lock)
+        {
+            if (_queue.Count == 0)
+            {
+                _freePermits++;
+                return;
+            }
+            long now = Stopwatch.GetTimestamp();
+            Waiter best = _queue[0];
+            int bestRank = Effective(best, now);
+            for (int i = 1; i < _queue.Count; i++)
+            {
+                var w = _queue[i];
+                int rank = Effective(w, now);
+                if (rank < bestRank || (rank == bestRank && w.Seq < best.Seq))
+                {
+                    best = w;
+                    bestRank = rank;
+                }
+            }
+            _queue.Remove(best);
+            best.IsGranted = true;
+            best.Granted.SetResult();
+        }
+    }
+
+    private int Effective(Waiter w, long now)
+    {
+        long waitedMs = (long)Stopwatch.GetElapsedTime(w.ArrivedTimestamp, now).TotalMilliseconds;
+        return Math.Max(RequestClass.Cheap, w.Rank - (int)Math.Min(waitedMs / _agingMs, RequestClass.Expensive));
     }
 }

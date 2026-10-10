@@ -23,6 +23,10 @@ public sealed class AiMoveOutcome
     public string? ExplainLevel;
     public int TtEntries;
 
+    /// <summary>Milliseconds the request waited for a worker, and the class (0 cheap, 1 medium, 2 expensive) it was queued in.</summary>
+    public double QueueWaitMs;
+    public int RequestClass;
+
     /// <summary>The "generated unknown card" flag of every hand card at parse time (before the analysis reorders the hands), per player, in request order.</summary>
     public bool[][]? Generated;
     public LMove? Move;
@@ -46,6 +50,12 @@ public sealed class AiMoveService
     private readonly TemplateSet _templates;
 
     private readonly int _ttEntries;
+
+    /// <summary>
+    /// Order the wait queue by estimated cost (review O8-1): cheap requests (endgames, the robust endgame) overtake openings, which age into the
+    /// same class so that they cannot be overtaken for ever. Off: every request is queued in the same class, i.e. plain first come first served.
+    /// </summary>
+    public bool PriorityScheduling { get; set; } = true;
 
     public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool, TemplateSet? templates = null, int ttEntries = 0)
     {
@@ -108,7 +118,7 @@ public sealed class AiMoveService
             outcome.ExplainLevel = explainLevel;
 
             var (result, engineError, solveRequest, facts, explainError, explainMs) =
-                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, observer, ct).ConfigureAwait(false);
+                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, observer, ct, (w, c) => { outcome.QueueWaitMs = w; outcome.RequestClass = c; }).ConfigureAwait(false);
             if (engineError is not null) return Finish(outcome, engineError);
             outcome.Solve = result;
             outcome.Request = solveRequest;
@@ -218,6 +228,7 @@ public sealed class AiMoveService
                     ["timings"] = new Dictionary<string, object?>
                     {
                         ["buildMs"] = result.BuildMs, ["searchMs"] = result.SearchMs, ["robustMs"] = result.RobustMs, ["totalMs"] = result.TotalMs,
+                        ["queueMs"] = outcome.QueueWaitMs,
                     },
                 },
             };
@@ -335,8 +346,11 @@ public sealed class AiMoveService
     }
 
     private async Task<(SolveResult? Result, AiMoveOutcome? Error, SolveRequest? Request, ExplanationFacts? Facts, string? ExplainError, double ExplainMs)> RunEngineAsync(
-        RequestParser parser, ParsedRequest req, Num depth, Num time, string explainLevel, IAiMoveObserver? observer, CancellationToken ct)
+        RequestParser parser, ParsedRequest req, Num depth, Num time, string explainLevel, IAiMoveObserver? observer, CancellationToken ct,
+        Action<double, int>? onQueued = null)
     {
+        double queueWaitMs = 0;
+        int usedClass = 0;
         SolveRequest request;
         try
         {
@@ -347,7 +361,11 @@ public sealed class AiMoveService
             return (null, EngineError("invalid_request", e.Message, 503), null, null, null, 0);
         }
 
-        var (worker, reason) = await _pool.AcquireAsync(ct).ConfigureAwait(false);
+        int requestClass = PriorityScheduling ? RequestClass.Estimate(9 - req.Board.Occupancy(), req.UseEndgameRobust) : TTC.Siren.Engine.RequestClass.Medium;
+        var acquired = await _pool.AcquireAsync(ct, requestClass).ConfigureAwait(false);
+        var (worker, reason) = (acquired.Worker, acquired.Reason);
+        queueWaitMs = acquired.WaitedMs;
+        usedClass = requestClass;
         if (worker is null)
             return (null, EngineError("busy", reason == BusyReason.QueueFull ? "queue_full" : reason == BusyReason.QueueTimeout ? "queue_timeout" : "aborted", 503),
                 null, null, null, 0);
@@ -366,6 +384,8 @@ public sealed class AiMoveService
                 result = _solve.Solve(request, worker, observer is null ? null : observer.OnDepth, observer is null ? null : observer.OnRobust);
                 if (result.Status != SolveResult.Ok) return (null, EngineError("unexpected_status", result.Status, 503), null, null, null, 0);
             }
+
+            onQueued?.Invoke(queueWaitMs, usedClass);
 
             // the explanation, while this worker (and the table of the search it just ran) is still ours
             ExplanationFacts? facts = null;
