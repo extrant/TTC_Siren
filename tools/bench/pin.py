@@ -146,6 +146,28 @@ def run_pinned(cmd, mask, cwd=None, timeout=None):
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
+def start_pinned(cmd, mask, cwd=None, stdout=None, stderr=None, env=None):
+    """Starts cmd in the background with the process affinity set to `mask` before it executes anything (Phase 7: servers).
+
+    Returns the subprocess.Popen (already running). `mask` None starts it unpinned. The caller stops it."""
+    if mask is None:
+        return subprocess.Popen(cmd, cwd=cwd, stdout=stdout, stderr=stderr, env=env)
+    if not _IS_WINDOWS:
+        raise SystemExit('pinned runs are only supported on Windows')
+    k = _kernel32()
+    ntdll = ctypes.WinDLL('ntdll')
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=stdout, stderr=stderr, env=env, creationflags=CREATE_SUSPENDED)
+    try:
+        handle = int(proc._handle)  # noqa: SLF001
+        if not k.SetProcessAffinityMask(handle, mask):
+            raise OSError(ctypes.get_last_error(), 'SetProcessAffinityMask(0x%X) failed' % mask)
+        ntdll.NtResumeProcess(ctypes.c_void_p(handle))
+    except BaseException:
+        proc.kill()
+        raise
+    return proc
+
+
 if __name__ == '__main__':
     classes = core_classes()
     print('process affinity now: %s' % describe(current_affinity()))
