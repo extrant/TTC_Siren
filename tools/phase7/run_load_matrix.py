@@ -31,6 +31,29 @@ ENGINE_DLL = os.path.join(ROOT, 'csharp', 'src', 'TTC.Siren.Engine', 'bin', 'Rel
 LOAD_TEST = os.path.join(ROOT, 'tools', 'bench', 'load_test.py')
 
 
+def record_memory(pid, out_path, label, workers):
+    """Working set and private bytes of the engine process after the load (PowerShell), appended to the results file."""
+    try:
+        text = subprocess.run(['powershell', '-NoProfile', '-Command',
+                               '(Get-Process -Id %d | ForEach-Object { "$($_.WorkingSet64) $($_.PrivateMemorySize64) $($_.PeakWorkingSet64)" })' % pid],
+                              capture_output=True, text=True, timeout=30).stdout.split()
+        import json
+        row = {'memory': True, 'label': '%s workers=%d' % (label, workers), 'working_set_bytes': int(text[0]),
+               'private_bytes': int(text[1]), 'peak_working_set_bytes': int(text[2])}
+        with open(out_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(row) + chr(10))
+        print('# engine memory after load, workers=%d: working set %.0f MiB, private %.0f MiB, peak working set %.0f MiB' %
+              (workers, row['working_set_bytes'] / 2**20, row['private_bytes'] / 2**20, row['peak_working_set_bytes'] / 2**20), flush=True)
+    except Exception as e:  # noqa: BLE001
+        print('# could not read the engine memory:', e)
+
+
+def requests_for(category, concurrency, override):
+    if override:
+        return override
+    return {'opening': max(12, 3 * concurrency), 'mid': 400, 'robust': 600}.get(category, 100)
+
+
 def wait_health(url, timeout=60):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -62,7 +85,8 @@ def main():
     ap.add_argument('--workers', default='1,4,8,12,20')
     ap.add_argument('--concurrency', default='1,2,4,8,12,16')
     ap.add_argument('--categories', default='opening,mid,robust')
-    ap.add_argument('--requests', type=int, default=0)
+    ap.add_argument('--requests', type=int, default=0,
+                    help='requests per cell (default: openings max(12, 3 x concurrency), mid-games 400, robust endgames 600; the fast ones need many)')
     ap.add_argument('--port', type=int, default=5391)
     ap.add_argument('--flask', action='store_true', help='also measure the full Flask path (one engine with the largest worker count)')
     ap.add_argument('--flask-concurrency', default='1,4,8,16')
@@ -83,9 +107,11 @@ def main():
         try:
             wait_health(url)
             for category in args.categories.split(','):
-                subprocess.run([sys.executable, LOAD_TEST, '--target', 'engine', '--url', url, '--category', category,
-                                '--concurrency', args.concurrency, '--requests', str(args.requests), '--check',
-                                '--label', '%s workers=%d' % (label, workers), '--json-out', args.out], check=False)
+                for conc in args.concurrency.split(','):
+                    subprocess.run([sys.executable, LOAD_TEST, '--target', 'engine', '--url', url, '--category', category,
+                                    '--concurrency', conc, '--requests', str(requests_for(category, int(conc), args.requests)), '--check',
+                                    '--label', '%s workers=%d' % (label, workers), '--json-out', args.out], check=False)
+            record_memory(engine.pid, args.out, label, workers)
             if args.flask and workers == int(args.workers.split(',')[-1]):
                 flask_port = args.port + 1
                 env = dict(os.environ, TTC_CS_ENGINE='on', TTC_CS_ENGINE_URL=url)
@@ -94,10 +120,12 @@ def main():
                 try:
                     wait_http('http://127.0.0.1:%d/' % flask_port)
                     for category in args.categories.split(','):
-                        subprocess.run([sys.executable, LOAD_TEST, '--target', 'flask', '--url', 'http://127.0.0.1:%d' % flask_port,
-                                        '--category', category, '--concurrency', args.flask_concurrency, '--requests', str(args.requests),
-                                        '--check', '--label', '%s engine workers=%d + Flask' % (label, workers), '--json-out', args.out],
-                                       check=False)
+                        for conc in args.flask_concurrency.split(','):
+                            subprocess.run([sys.executable, LOAD_TEST, '--target', 'flask', '--url', 'http://127.0.0.1:%d' % flask_port,
+                                            '--category', category, '--concurrency', conc,
+                                            '--requests', str(requests_for(category, int(conc), args.requests) // (1 if category == 'opening' else 4)),
+                                            '--check', '--label', '%s engine workers=%d + Flask' % (label, workers),
+                                            '--json-out', args.out], check=False)
                 finally:
                     flask.kill()
         finally:

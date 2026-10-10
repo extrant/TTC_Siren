@@ -487,3 +487,27 @@ def test_the_request_recorder_is_off_by_default_and_records_when_asked(tmp_path,
     assert saved['request']['myOwner'] == entry['request']['myOwner']
     state = saved['random_state']
     random.setstate((state[0], tuple(state[1]), state[2]))  # a valid generator state: what a replay needs
+
+
+# --------------------------------------------------------------------------- the remaining reasons
+
+def test_fallback_unexpected_status_after_the_fallback_candidates(stub, monkeypatch, corpus):
+    entry = pick(corpus, 'fallback_path')
+    request = copy.deepcopy(entry['request'])
+    request['max_depth'] = 2
+    fallback_stub(stub, lambda p: (200, {'protocol': 1, 'status': 'needs_fallback_candidates', 'unknownCount': 1}, 0))
+    random.seed(entry['seed'])
+    body = ai_server.app.test_client().post('/ai_move', json=request).get_json()
+    assert body['engine'] == 'python' and body['fallback_reason'] == 'unexpected_status'
+    after = random.random()
+    monkeypatch.setenv('TTC_CS_ENGINE', 'off')
+    random.seed(entry['seed'])
+    ai_server.app.test_client().post('/ai_move', json=request)
+    assert random.random() == after  # the generator was restored for the Python path
+
+
+def test_fallback_client_error_never_fails_the_request(stub, monkeypatch, corpus):
+    def boom(*a, **k):
+        raise RuntimeError('boom')
+    monkeypatch.setattr(csharp_engine, 'state_payload', boom)
+    run_with_stub(stub, monkeypatch, corpus, lambda s: None, 'client_error')

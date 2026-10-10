@@ -58,7 +58,9 @@ def load_flask_requests(corpus_path, category, max_depth, max_time):
         req = dict(e['request'])
         req['max_depth'] = max_depth
         req['max_time'] = max_time
-        out.append({'i': e['i'], 'tags': e['tags'], 'body': req, 'deterministic': not any(t in e['tags'] for t in ('unknown:1', 'unknown:2', 'unknown:3+'))})
+        unknown = any(all(it[k] == 0 for k in ('numU', 'numR', 'numD', 'numL')) and it.get('inHand', True)
+                      for hand in (req['myHand'], req['oppHand']) for it in hand)  # sampled with Python's shared random generator
+        out.append({'i': e['i'], 'tags': e['tags'], 'body': req, 'deterministic': not unknown})
     return out
 
 
@@ -135,8 +137,15 @@ def run_level(target, url, requests, concurrency, total, timeout):
                 conn.close()
                 conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout)
             latency = time.perf_counter() - t0
+            deterministic = item['deterministic']
+            if deterministic and isinstance(body, dict):
+                # a search that ran into its time limit depends on the wall clock (how many nodes the machine managed): not comparable
+                limit = item['body'].get('maxTime') if target == 'engine' else item['body'].get('max_time')
+                took = (body.get('totals') or {}).get('elapsed') if target == 'engine' else latency
+                if limit is not None and took is not None and took >= 0.9 * limit:
+                    deterministic = False
             with lock:
-                results.append({'i': item['i'], 'latency': latency, 'status': status, 'body': body, 'deterministic': item['deterministic']})
+                results.append({'i': item['i'], 'latency': latency, 'status': status, 'body': body, 'deterministic': deterministic})
         conn.close()
 
     t_start = time.perf_counter()
@@ -165,6 +174,7 @@ def summarise(target, results, wall, concurrency):
         'p50_s': round(percentile(lat, 0.50), 4), 'p95_s': round(percentile(lat, 0.95), 4),
         'p99_s': round(percentile(lat, 0.99), 4), 'max_s': round(lat[-1], 4) if lat else 0,
         'errors': len(results) - len(ok),
+        'time_limited_or_random': sum(1 for r in results if not r['deterministic']),
     }
     if target == 'engine':
         row['busy'] = sum(1 for r in results if r['status'] == 503)
@@ -201,6 +211,8 @@ def main():
     ap.add_argument('--reference', default=DEFAULT_REFERENCE)
     ap.add_argument('--timeout', type=float, default=120.0)
     ap.add_argument('--check', action='store_true', help='verify that the answers do not depend on the concurrency')
+    ap.add_argument('--digests', help='JSON file with the reference answer digests of earlier invocations: the check then spans invocations '
+                                      '(other concurrency levels, other worker counts); new requests are added to it')
     ap.add_argument('--label', default='')
     ap.add_argument('--json-out')
     args = ap.parse_args()
@@ -218,6 +230,9 @@ def main():
     rows = []
     reference_digests = {}
     changed = []
+    if args.digests and os.path.exists(args.digests):
+        with open(args.digests, encoding='utf-8') as f:
+            reference_digests = {int(k): v for k, v in json.load(f).items()}
     for c in levels:
         total = args.requests or max(8, 3 * c)
         results, wall = run_level(args.target, args.url, requests, c, total, args.timeout)
@@ -232,6 +247,10 @@ def main():
                 if r['i'] in reference_digests and reference_digests[r['i']] != d:
                     changed.append((r['i'], c))
                 reference_digests.setdefault(r['i'], d)
+    if args.check and args.digests:
+        os.makedirs(os.path.dirname(os.path.abspath(args.digests)), exist_ok=True)
+        with open(args.digests, 'w', encoding='utf-8') as f:
+            json.dump({str(k): v for k, v in reference_digests.items()}, f)
     if args.check:
         print('# determinism check over %d distinct requests: %s' % (len(reference_digests), 'IDENTICAL at every concurrency' if not changed
                                                                       else 'CHANGED for %r' % changed[:10]))
