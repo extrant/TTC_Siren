@@ -344,11 +344,12 @@ def load_override_block():
     path = os.path.join(ROOT, 'ai_server.py')
     with open(path, encoding='utf-8') as f:
         tree = ast.parse(f.read())
-    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'ai_move')
-    found = [n for n in ast.walk(fn)
+    # Phase 7 moved the solver block of ai_move into _solve_minimax_python without changing it; look in both places.
+    functions = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in ('ai_move', '_solve_minimax_python')]
+    found = [n for fn in functions for n in ast.walk(fn)
              if isinstance(n, ast.If) and ast.unparse(n.test) == 'move is not None and robust_move is not None']
     if len(found) != 1:
-        raise SystemExit('override block not found exactly once in ai_move (found %d)' % len(found))
+        raise SystemExit('override block not found exactly once in ai_move/_solve_minimax_python (found %d)' % len(found))
     module = ast.Module(body=[found[0]], type_ignores=[])
     ast.fix_missing_locations(module)
     return compile(module, 'ai_server.py:ai_move:override', 'exec')

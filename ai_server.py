@@ -7,6 +7,8 @@ from core.game_state import GameState
 from ai.ai import find_best_move_parallel, evaluate_state
 from ai.monte_carlo import monte_carlo_best_move
 from ai.unknown_card_handler import initialize_unknown_card_handler, get_unknown_card_handler
+from ai import csharp_engine
+import logging
 import os
 import codecs
 import threading
@@ -1994,6 +1996,248 @@ def analyze_adjacent_synergy(card, row, col, board):
     
     return '，'.join(synergy_effects) if synergy_effects else None
 
+_engine_log = logging.getLogger('ttc.engine')
+_record_lock = threading.Lock()
+_record_counter = 0
+
+
+def _record_request(data):
+    """
+    Opt-in request recorder (``TTC_RECORD_REQUESTS=<directory>``, off by default; Phase 7). Stores the raw ``/ai_move`` JSON and
+    the state of Python's global ``random`` generator at that moment, which is what a replay needs to reproduce the unknown-card
+    sampling of ``parse_hand``. NOTE: the files contain the user's requests; do not enable it where that is not acceptable.
+    Under Flask's threaded server the generator is shared between requests, so the stored state is exact only for a
+    single-request-at-a-time server.
+    """
+    global _record_counter
+    directory = os.environ.get('TTC_RECORD_REQUESTS')
+    try:
+        import json as _json
+        os.makedirs(directory, exist_ok=True)
+        state = random.getstate()
+        with _record_lock:
+            number = _record_counter
+            _record_counter += 1
+        name = 'request_%s_%04d_%d.json' % (time.strftime('%Y%m%d_%H%M%S'), number, os.getpid())
+        with open(os.path.join(directory, name), 'w', encoding='utf-8') as f:
+            _json.dump({'recorded_at': time.time(), 'random_state': [state[0], list(state[1]), state[2]], 'request': data},
+                       f, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001 - recording must never break a request
+        _engine_log.warning('request recording failed: %s', e)
+
+
+def _solve_minimax_python(game_state, data, open_mode, aggressive_mode, progress_callback, use_endgame_robust,
+                          opp_unknown_count, my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids,
+                          console_reporter):
+    """
+    The minimax solver block of ``ai_move`` (Python iterative deepening, then the information-set robust endgame and the
+    override rule), moved here without any change (Phase 7) so that it can be the fallback of the C# engine. Returns the move.
+    """
+    move, _ = find_best_move_parallel(
+        game_state,
+        max_depth=data.get('max_depth', 10),
+        verbose=False,
+        all_cards=get_all_cards(),
+        open_mode=open_mode,
+        max_time=data.get('max_time', 10),
+        progress_callback=progress_callback,
+        aggressive=aggressive_mode
+    )
+
+    if use_endgame_robust:
+        opponent_player_idx = 0 if my_owner == 'blue' else 1
+        scenario_sample_count = 1 if opp_unknown_count == 0 else min(24, max(16, opp_unknown_count * 12))
+        scenario_states = _build_endgame_scenarios(
+            game_state,
+            opp_hand,
+            used_cards,
+            rules,
+            board,
+            opp_owner,
+            opponent_player_idx,
+            scenario_sample_count,
+            candidate_card_ids=npc_ids
+        )
+        robust_move, robust_candidates = select_endgame_robust_move(
+            game_state,
+            scenario_states,
+            game_state.current_player_idx,
+            progress_reporter=console_reporter,
+            aggressive=aggressive_mode
+        )
+        robust_lookup = {_move_key(item['move']): item for item in robust_candidates}
+
+        if move is not None and robust_move is not None:
+            standard_item = robust_lookup.get(_move_key(move))
+            robust_item = robust_lookup.get(_move_key(robust_move))
+            if standard_item and robust_item:
+                if aggressive_mode:
+                    should_override = (
+                        robust_item['final_score'] > standard_item['final_score'] + 2.5
+                        and robust_item['safety_ratio'] >= 0.75
+                    )
+                else:
+                    should_override = (
+                        standard_item['safety_ratio'] < 0.5 and robust_item['safety_ratio'] >= 0.5
+                    ) or (
+                        robust_item['safety_ratio'] > standard_item['safety_ratio'] and
+                        robust_item['final_score'] >= standard_item['final_score'] - 1.0
+                    ) or (
+                        robust_item['final_score'] > standard_item['final_score'] + 0.05
+                    )
+                if should_override and _move_key(robust_move) != _move_key(move):
+                    console_ui.update_thinking(
+                        f"信息集残局覆盖: 标准={standard_item['final_score']:.3f}/"
+                        f"{standard_item['safety_ratio']:.2f}, "
+                        f"信息集={robust_item['final_score']:.3f}/{robust_item['safety_ratio']:.2f}, "
+                        f"场景={len(scenario_states)}"
+                    )
+                    move = robust_move
+    return move
+
+
+def _engine_illegal(reason, detail):
+    raise csharp_engine.EngineFallback(reason, detail)
+
+
+def _engine_move(game_state, wire):
+    """Map the engine's (slot, row, col, cardId) to Python's ``(card, (row, col))`` and verify it is legal for ``game_state``."""
+    if wire is None:
+        return None
+    try:
+        slot, row, col, card_id = wire['slot'], wire['row'], wire['col'], wire['cardId']
+    except (KeyError, TypeError):
+        raise csharp_engine.EngineFallback('malformed_response', 'move')
+    for value in (slot, row, col, card_id):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise csharp_engine.EngineFallback('malformed_response', 'move field type')
+    player = game_state.current_player
+    if not (0 <= slot < len(player.hand)):
+        _engine_illegal('illegal_move', 'hand slot %d of %d' % (slot, len(player.hand)))
+    card = player.hand[slot]
+    if (-1 if card.card_id is None else card.card_id) != card_id:
+        _engine_illegal('illegal_move', 'card id %r at slot %d, engine said %r' % (card.card_id, slot, card_id))
+    if not (0 <= row < 3 and 0 <= col < 3) or not game_state.board.is_empty(row, col):
+        _engine_illegal('illegal_move', 'cell (%r, %r) is not empty' % (row, col))
+    if not any(c is card for c in player.get_playable_cards(game_state.rules)):
+        _engine_illegal('illegal_move', 'card at slot %d is not playable under the active rules' % slot)
+    return (card, (row, col))
+
+
+def _engine_outcome(response, game_state, wire_depth, max_time_raw, show_search_progress):
+    """Turn an ``ok`` engine response into what ``ai_move`` needs: the move, statistics and (optionally) search progress."""
+    try:
+        move = _engine_move(game_state, response.get('move'))
+        totals = response['totals']
+        root_moves = totals.get('rootMoves', 0)
+        progress = []
+        if show_search_progress:
+            for depth in response['depths']:
+                best = _engine_move(game_state, depth.get('move'))
+                elapsed = float(depth['elapsed'])
+                nodes_total = depth['nodesTotal']
+                progress.append({
+                    'depth': depth['depth'],
+                    'max_depth': wire_depth,
+                    'best_move': format_move_for_display(best),
+                    'best_score': csharp_engine.hex_to_float(depth['scoreBits']),
+                    'nodes_searched': nodes_total,
+                    'time_elapsed': round(elapsed, 3),
+                    'time_remaining': round(float(max_time_raw) - elapsed, 3),
+                    'nodes_per_second': round(nodes_total / max(elapsed, 1e-9), 0),
+                    'tt_hit_rate': round(depth['ttHitsTotal'] / max(nodes_total, 1) * 100, 1),
+                    'cutoff_rate': round(depth['cutoffsTotal'] / max(nodes_total, 1) * 100, 1),
+                    'branching_factor': round(root_moves, 2),
+                })
+        robust = response.get('robust')
+        info = {
+            'protocol': response.get('protocol'),
+            'worker': response.get('worker'),
+            'robust': bool(robust),
+            'overridden': bool(robust and robust.get('overridden')),
+            'scenarios': robust.get('scenarios') if robust else None,
+            'timings': response.get('timings'),
+        }
+        return {'move': move, 'progress': progress, 'totals': totals, 'info': info}
+    except csharp_engine.EngineFallback:
+        raise
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
+        raise csharp_engine.EngineFallback('malformed_response', '%s: %s' % (type(e).__name__, e))
+
+
+def _solve_minimax_with_engine(game_state, data, aggressive_mode, use_endgame_robust, opp_unknown_count,
+                               my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids, show_search_progress):
+    """
+    Phase 7: run the minimax path of ``ai_move`` on the C# engine. Returns ``(outcome, None)`` when the engine answered with a
+    legal move, otherwise ``(None, reason)``; the caller then runs :func:`_solve_minimax_python` exactly as before.
+
+    The request is built from ``game_state`` before any Python search touched it, so the engine sees the hand order of the
+    request. If the engine needs the random fallback candidates of the robust layer (Python's legal enumeration was empty),
+    this calls ``handler.generate_opponent_cards`` with the very arguments ``_build_endgame_scenarios`` would use, and sends
+    them in a second call; should anything fail after that, the random generator is restored so that the Python path draws
+    the same numbers it would have drawn without the engine.
+    """
+    saved_random_state = None
+    try:
+        max_depth_raw = data.get('max_depth', 10)
+        max_time_raw = data.get('max_time', 10)
+        wire_depth = csharp_engine.wire_max_depth(max_depth_raw)
+        wire_time = csharp_engine.wire_max_time(max_time_raw)
+        payload = {
+            'protocol': csharp_engine.PROTOCOL,
+            'rules': list(rules or []),
+            'state': csharp_engine.state_payload(game_state),
+            'aggressive': bool(aggressive_mode),
+            'maxDepth': wire_depth,
+            'maxTime': wire_time,
+            'robust': None,
+        }
+        if use_endgame_robust:
+            opponent_player_idx = 0 if my_owner == 'blue' else 1
+            payload['robust'] = {
+                'aiPlayer': int(game_state.current_player_idx),
+                'opponent': opponent_player_idx,
+                'generated': [[1 if _is_generated_unknown_card(c) else 0 for c in player.hand]
+                              for player in game_state.players],
+                'sampleCount': 1 if opp_unknown_count == 0 else min(24, max(16, opp_unknown_count * 12)),
+                'npcIds': [int(i) for i in npc_ids],
+                'handler': bool(get_unknown_card_handler()),
+                'fallbackCandidates': None,
+            }
+
+        response = csharp_engine.solve(payload, wire_time)
+        if response.get('status') == 'needs_fallback_candidates':
+            handler = get_unknown_card_handler()
+            unknown_indices = _get_unknown_hand_indices(opp_hand)
+            known_opp_hand = [card for card in opp_hand if not _is_generated_unknown_card(card)]
+            saved_random_state = random.getstate()
+            candidates = handler.generate_opponent_cards(
+                count=len(unknown_indices),
+                rules=rules,
+                used_cards=used_cards.copy(),
+                board_state=board,
+                known_hand=known_opp_hand,
+                owner=opp_owner,
+                can_use=True
+            )
+            payload['robust']['fallbackCandidates'] = [csharp_engine.card_array(c) for c in candidates]
+            response = csharp_engine.solve(payload, wire_time)
+            if response.get('status') != 'ok':
+                raise csharp_engine.EngineFallback('unexpected_status', str(response.get('status')))
+
+        outcome = _engine_outcome(response, game_state, wire_depth, max_time_raw, show_search_progress)
+        return outcome, None
+    except csharp_engine.EngineFallback as e:
+        reason = e.reason
+        _engine_log.warning('C# engine fallback (%s)', e)
+    except Exception as e:  # noqa: BLE001 - the engine is an optimisation: nothing it does may fail a request
+        reason = 'client_error'
+        _engine_log.warning('C# engine client error: %r', e)
+    if saved_random_state is not None:
+        random.setstate(saved_random_state)
+    return None, reason
+
+
 app = Flask(__name__)
 
 @app.route('/ai_move', methods=['POST'])
@@ -2002,6 +2246,8 @@ def ai_move():
         data = request.get_json()
         if not data or 'board' not in data or 'myHand' not in data or 'oppHand' not in data or 'myOwner' not in data:
             return jsonify({'error': 'Invalid input data'}), 400
+        if os.environ.get('TTC_RECORD_REQUESTS'):
+            _record_request(data)
         console_ui.begin_request("ai_move", label="求解中")
         used_cards = set()
         board = parse_board(data['board'])
@@ -2121,6 +2367,8 @@ def ai_move():
         # 选择求解器（solver_type 已在上面读取）
         mc_simulations = data.get('mc_simulations', 150)  # 蒙特卡洛模拟次数
 
+        engine_outcome = None
+        engine_fallback_reason = None
         if solver_type == 'monte_carlo':
             console_ui.update_input(params={"求解器": f"蒙特卡洛 (simulations={mc_simulations})"})
             console_ui.update_thinking(f"蒙特卡洛求解中 (simulations={mc_simulations})")
@@ -2134,70 +2382,29 @@ def ai_move():
             )
         else:
             console_ui.update_input(params={"求解器": "Minimax"})
-            move, _ = find_best_move_parallel(
-                game_state,
-                max_depth=data.get('max_depth', 10),
-                verbose=False,
-                all_cards=get_all_cards(),
-                open_mode=open_mode,
-                max_time=data.get('max_time', 10),
-                progress_callback=progress_callback,
-                aggressive=aggressive_mode
-            )
-
-            if use_endgame_robust:
-                opponent_player_idx = 0 if my_owner == 'blue' else 1
-                scenario_sample_count = 1 if opp_unknown_count == 0 else min(24, max(16, opp_unknown_count * 12))
-                scenario_states = _build_endgame_scenarios(
-                    game_state,
-                    opp_hand,
-                    used_cards,
-                    rules,
-                    board,
-                    opp_owner,
-                    opponent_player_idx,
-                    scenario_sample_count,
-                    candidate_card_ids=npc_ids
-                )
-                robust_move, robust_candidates = select_endgame_robust_move(
-                    game_state,
-                    scenario_states,
-                    game_state.current_player_idx,
-                    progress_reporter=console_reporter,
-                    aggressive=aggressive_mode
-                )
-                robust_lookup = {_move_key(item['move']): item for item in robust_candidates}
-
-                if move is not None and robust_move is not None:
-                    standard_item = robust_lookup.get(_move_key(move))
-                    robust_item = robust_lookup.get(_move_key(robust_move))
-                    if standard_item and robust_item:
-                        if aggressive_mode:
-                            should_override = (
-                                robust_item['final_score'] > standard_item['final_score'] + 2.5
-                                and robust_item['safety_ratio'] >= 0.75
-                            )
-                        else:
-                            should_override = (
-                                standard_item['safety_ratio'] < 0.5 and robust_item['safety_ratio'] >= 0.5
-                            ) or (
-                                robust_item['safety_ratio'] > standard_item['safety_ratio'] and
-                                robust_item['final_score'] >= standard_item['final_score'] - 1.0
-                            ) or (
-                                robust_item['final_score'] > standard_item['final_score'] + 0.05
-                            )
-                        if should_override and _move_key(robust_move) != _move_key(move):
-                            console_ui.update_thinking(
-                                f"信息集残局覆盖: 标准={standard_item['final_score']:.3f}/"
-                                f"{standard_item['safety_ratio']:.2f}, "
-                                f"信息集={robust_item['final_score']:.3f}/{robust_item['safety_ratio']:.2f}, "
-                                f"场景={len(scenario_states)}"
-                            )
-                            move = robust_move
+            if csharp_engine.is_enabled():
+                # Phase 7: the C# engine first. The request is built from game_state NOW, before any Python search, so the
+                # engine sees the hand order of the request (D-015 decision: Fast search + canonical hand order).
+                engine_outcome, engine_fallback_reason = _solve_minimax_with_engine(
+                    game_state, data, aggressive_mode, use_endgame_robust, opp_unknown_count,
+                    my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids, show_search_progress)
+            if engine_outcome is not None:
+                move = engine_outcome['move']
+                search_progress_data.extend(engine_outcome['progress'])
+            else:
+                move = _solve_minimax_python(
+                    game_state, data, open_mode, aggressive_mode, progress_callback, use_endgame_robust,
+                    opp_unknown_count, my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids, console_reporter)
 
         if move is None:
             console_ui.end_request("无可用动作")
-            return jsonify({'move': None, 'msg': '无可用动作'})
+            no_move_result = {'move': None, 'msg': '无可用动作'}
+            if engine_outcome is not None:
+                no_move_result['engine'] = 'csharp'
+            elif engine_fallback_reason is not None:
+                no_move_result['engine'] = 'python'
+                no_move_result['fallback_reason'] = engine_fallback_reason
+            return jsonify(no_move_result)
 
         card, (row, col) = move
 
@@ -2215,15 +2422,33 @@ def ai_move():
         new_state.play_move(row, col, card)
 
         # 性能统计
-        from ai.ai import SEARCH_STATS
-        performance_stats = {
-            'nodes_searched': SEARCH_STATS.nodes_searched,
-            'search_depth': SEARCH_STATS.depth_completed,
-            'tt_hit_rate': SEARCH_STATS.tt_hits / max(SEARCH_STATS.nodes_searched, 1) * 100,
-            'cutoff_rate': SEARCH_STATS.alpha_beta_cutoffs / max(SEARCH_STATS.nodes_searched, 1) * 100,
-            'unknown_cards_processed': opponent_analysis.get('total_unknown', 0),
-            'performance_optimizations_active': True  # 标记优化已激活
-        }
+        if engine_outcome is not None:
+            # Python never searched on this path: the statistics are the engine's (same keys as below)
+            engine_totals = engine_outcome['totals']
+            engine_nodes = engine_totals.get('nodes', 0)
+            performance_stats = {
+                'nodes_searched': engine_nodes,
+                'search_depth': engine_totals.get('depthCompleted', 0),
+                'tt_hit_rate': engine_totals.get('ttHits', 0) / max(engine_nodes, 1) * 100,
+                'cutoff_rate': engine_totals.get('cutoffs', 0) / max(engine_nodes, 1) * 100,
+                'unknown_cards_processed': opponent_analysis.get('total_unknown', 0),
+                'performance_optimizations_active': True
+            }
+        else:
+            from ai.ai import SEARCH_STATS
+            performance_stats = {
+                'nodes_searched': SEARCH_STATS.nodes_searched,
+                'search_depth': SEARCH_STATS.depth_completed,
+                'tt_hit_rate': SEARCH_STATS.tt_hits / max(SEARCH_STATS.nodes_searched, 1) * 100,
+                'cutoff_rate': SEARCH_STATS.alpha_beta_cutoffs / max(SEARCH_STATS.nodes_searched, 1) * 100,
+                'unknown_cards_processed': opponent_analysis.get('total_unknown', 0),
+                'performance_optimizations_active': True  # 标记优化已激活
+            }
+        if engine_outcome is not None:
+            performance_stats['engine'] = 'csharp'
+        elif engine_fallback_reason is not None:
+            performance_stats['engine'] = 'python'
+            performance_stats['fallback_reason'] = engine_fallback_reason
 
         star_map = get_card_star_map()
         star = star_map.get(card.card_id, '?')
@@ -2260,6 +2485,13 @@ def ai_move():
             'recommendation': recommendation,
             'performance_stats': performance_stats  # 添加性能统计
         }
+        # Phase 7: which solver answered (absent when the engine is switched off, so the response is unchanged then)
+        if engine_outcome is not None:
+            result['engine'] = 'csharp'
+            result['engine_info'] = engine_outcome['info']
+        elif engine_fallback_reason is not None:
+            result['engine'] = 'python'
+            result['fallback_reason'] = engine_fallback_reason
 
         # 如果请求了搜索进度，添加到结果中
         if show_search_progress and search_progress_data:
