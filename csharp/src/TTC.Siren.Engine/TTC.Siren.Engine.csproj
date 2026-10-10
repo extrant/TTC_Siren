@@ -3,7 +3,11 @@
   <PropertyGroup>
     <RootNamespace>TTC.Siren.Engine</RootNamespace>
     <AssemblyName>TTC.Siren.Engine</AssemblyName>
-    <ServerGarbageCollector>false</ServerGarbageCollector>
+    <!-- Review L7-1: the property used to be spelled ServerGarbageCollector, which MSBuild ignores, so Server GC was active by accident.
+         Measured (docs/reports/phase7/gc, tools/phase7/gc_compare.py): Server GC is as fast as workstation GC for openings and mid-games and
+         up to 5-20% faster for the very short robust-endgame requests on the P-cores; memory is the same (the transposition tables dominate).
+         Chosen explicitly: Server GC. Non-concurrent GC: the engine has no UI thread to keep responsive. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredPGO>true</TieredPGO>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>

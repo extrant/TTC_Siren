@@ -52,6 +52,22 @@ public sealed class EngineTests : IClassFixture<EngineFixture>
     }
 
     [Fact]
+    public void The_engine_runtime_config_states_the_chosen_gc_mode_explicitly()
+    {
+        // Review L7-1: the project used to set a property MSBuild ignores (ServerGarbageCollector). The measured choice (Server GC,
+        // non-concurrent; docs/reports/phase7/gc) must be what the build writes into the runtimeconfig.json.
+        string engineBin = Path.Combine(GoldenFiles.RepoRoot, "csharp", "src", "TTC.Siren.Engine", "bin");
+        var configs = Directory.GetFiles(engineBin, "TTC.Siren.Engine.runtimeconfig.json", SearchOption.AllDirectories);
+        Assert.NotEmpty(configs);
+        foreach (string config in configs)
+        {
+            var props = JsonNode.Parse(File.ReadAllText(config))!["runtimeOptions"]!["configProperties"]!;
+            Assert.True(props["System.GC.Server"]!.GetValue<bool>(), config);
+            Assert.False(props["System.GC.Concurrent"]!.GetValue<bool>(), config);
+        }
+    }
+
+    [Fact]
     public void The_default_queue_settings_fit_an_engine_that_has_no_fallback()
     {
         // A-20: a request waits for the engine instead of being answered by Python, so the queue is deep and the wait long.
