@@ -1,206 +1,165 @@
-# Deploying the C# engine on Windows Server (Phase 7)
-
-The Python `ai_server` (Flask) parses requests, samples unknown cards and writes the analysis text. For the **minimax** solver it sends the
-fully determined position to a local C# engine over HTTP (`127.0.0.1` only) and uses the engine's answer. **Since the Phase 7 hardening (decision A-20)
-the engine is required for the minimax solver: there is no automatic fallback to the Python solver.** When the engine is missing, busy for too long, slow,
-speaks another protocol, loaded another card database, or returns a move that is not legal, `/ai_move` answers with an HTTP error (503 plus an
-`engine_error` code, section 6) and the game client may retry. The only way to use the Python solver is the operator's manual switch `TTC_CS_ENGINE=off`
-(section 7). `solver=monte_carlo` never uses the engine.
+# Deploying the TTC Siren server on Windows Server (Phase 8A, cloud topology)
 
 ```
-client -> Flask ai_server (Python) --HTTP 127.0.0.1:5300--> TTC.Siren.Engine (one process, a pool of worker threads)
-                         \-- engine problem --> HTTP 503 {"engine_error": ...}   (no Python search)
-                         \-- TTC_CS_ENGINE=off (set by hand) --> the original Python search
+game plugin ─┐                          ┌─ TTC.Siren.Server  (C#, ASP.NET Core, one process, the engine runs inside it)
+browser UI  ─┼── HTTPS :443 + API key ──┤     /ai_move  /v1/games  /v1/live  /health  /   (placeholder page or the web UI)
+             │                          └─ loopback ──> Python app (waitress, 127.0.0.1:5001)   only /api/recommend, /api/draft/analyze, /api/winrate
 ```
 
-**A machine without the engine** (a development box, a server where it is not installed yet) must set `TTC_CS_ENGINE=off`, otherwise every minimax request there
-answers 503 `connection_failed`.
+Since Phase 8A the Python server is **no longer on the `/ai_move` path**. The C# server parses the request, samples the unknown cards (a port of the Python
+logic, exact for the same seed), searches (in process: worker pool, Fast iterative deepening, exact and information-set endgame), writes the explanation and the game log,
+and answers. The Python app stays only for three endpoints until Phase 8C ports them, and as the reference implementation of the tests. The separate
+`TTC.Siren.Engine` host (`/v1/solve`, loopback) is still built for the test tools; the server does not use it.
+
+Rollback at any time: point the plugin back at the old Python server (`python app.py` / `serve_waitress.py` with `TTC_CS_ENGINE=on` and the engine of Phase 7). Nothing in the
+Python code changed.
 
 ## 1. What you need
 
 | Item | Notes |
 |---|---|
-| Windows Server 2016 or newer, x64 | Tested only on Windows 11 here; the engine uses nothing Windows specific except the optional service hosting. |
-| **.NET 10 ASP.NET Core Runtime** | Download "ASP.NET Core Runtime 10.x" (or the "Hosting Bundle", which contains it) from dot.net and install it. The engine is published **framework-dependent**: no self-contained copy of .NET. Check with `dotnet --list-runtimes` (needs `Microsoft.AspNetCore.App 10.x`). |
-| The Python environment of the server | CPython or PyPy; the engine client uses the standard library only. |
-| The card database | The engine and the Python server must load **the same file** `data\幻卡数据库.csv`; the Python side compares SHA-256 hashes at start-up and refuses the engine if they differ. |
+| Windows Server 2016 or newer, x64 | Tested on Windows 11 here. |
+| **.NET 10 ASP.NET Core Runtime** (or the Hosting Bundle) | The server is published framework-dependent. `dotnet --list-runtimes` must show `Microsoft.AspNetCore.App 10.x`. |
+| Python 3 with Flask (and `waitress`) | Only for the three `/api/*` endpoints: `pip install -r requirements.txt waitress`. |
+| The card database | `data\幻卡数据库.csv`. The server and the Python app must load the **same file**. |
+| A TLS certificate | A PFX file (your own, or issued with win-acme / Let's Encrypt, see section 5). |
+| A DNS name pointing at the server | The certificate must be valid for it. |
 
-## 2. Build and publish (on a development machine with the .NET 10 SDK)
+## 2. Publish
 
 ```
-dotnet publish csharp\src\TTC.Siren.Engine -c Release -o publish\engine
+dotnet publish csharp\src\TTC.Siren.Server -c Release -o publish\server
 ```
 
-Copy the folder `publish\engine` to the server, for example to `C:\ttc\engine`. It contains `TTC.Siren.Engine.exe`, `TTC.Siren.Engine.dll`,
-`appsettings.json` and the runtime configuration. Copy `data\幻卡数据库.csv` next to your Python server as before, for example `C:\ttc\data\`.
+Copy `publish\server` to the server, for example `C:\ttc\server`, and `data\幻卡数据库.csv` to `C:\ttc\data\`. Never copy golden data, corpora, game logs or key files from a development machine.
 
 ## 3. Configuration
 
-Settings come from `appsettings.json` (section `Engine`) and from the command line (the command line wins).
+Settings come from `appsettings.json` (section `Server`), environment variables (`TTC_Server__Security__Https__Port=443`), and the command line (`--port`, `--workers`, ... ; the command line wins).
 
-| Command line | `appsettings.json` key | Default | Meaning |
-|---|---|---|---|
-| `--host` | `Engine:Host` | `127.0.0.1` | Listen address. **Must be a loopback address.** The engine refuses to start on another address unless `--allow-remote` is given. It has no authentication; never expose it. |
-| `--port` | `Engine:Port` | `5300` | TCP port. |
-| `--workers` | `Engine:Workers` | number of logical CPUs | Searches that run at the same time (see section 8). |
-| `--queue` | `Engine:QueueLimit` | `256` | Requests that may wait for a worker. More are answered `busy` (HTTP 503) at once, which the Python server passes on as 503 `busy`. |
-| `--queue-wait-ms` | `Engine:QueueWaitMs` | `60000` | How long a queued request waits for a worker before it is answered `busy`. `/v1/health` reports it as `queueWaitMs`; the Python client's read timeout is `max_time` + this + a margin, so a queued request is always answered by the engine (a result or `busy`) and never by a client timeout. |
-| `--card-db` | `Engine:CardDbPath` | found above the application folder | Absolute path of `幻卡数据库.csv`. Set it explicitly on a server. |
-| `--tt-entries` | `Engine:TtEntries` | `4194304` | Entries (24 bytes each) of every worker's transposition table: 4 Mi entries = 96 MiB per worker. Power of two. |
-| `--memo-entries` | `Engine:MemoEntries` | `32768` | Entries of every worker's exact-endgame memo (0.75 MiB). |
+| Key (`Server:`) | Default | Meaning |
+|---|---|---|
+| `Host`, `Port` | `127.0.0.1`, `5000` | The plain HTTP listener. Behind a TLS proxy keep loopback. For a direct internet-facing server use `0.0.0.0` with `HttpEnabled=false` and HTTPS on. |
+| `HttpEnabled` | `true` | `false` serves HTTPS only. |
+| `Workers` | logical CPUs | Searches that run at the same time (section 9). |
+| `QueueLimit`, `QueueWaitMs` | `256`, `60000` | Requests that may wait for a worker, and for how long. More, or too long, are answered 503 `busy`. |
+| `PriorityScheduling`, `AgingMs` | `true`, `2000` | The wait queue is ordered by estimated cost: endgame requests overtake openings; a waiting request moves up one class every `AgingMs`, so an opening is overtaken for at most `2 * AgingMs`. |
+| `TtEntries`, `MemoEntries` | `4194304`, `32768` | Per worker table sizes (96 MiB + 0.75 MiB). |
+| `CardDbPath` | found above the application | Absolute path of the CSV. Set it explicitly. |
+| `LiveBuffer` | `256` | Events a `/v1/live` client may fall behind before the oldest are dropped. |
+| `StaticDirectory` | none | A folder of static files served at `/` (the web UI of Phase 8B). Without it `/` shows the placeholder page. |
+| `TemplatesDirectory` | none | A folder with another `explain.zh-CN.json` (wording of the explanations). |
+| `GameLog:Directory` | `<app>\gamelogs` | Where game logs are written (one folder per key). Set it outside the application folder. |
+| `GameLog:RetentionDays` | `30` | Logs not written for this long are deleted (at start and daily). |
+| `GameLog:GapMinutes` | `15` | Largest gap between two requests of one game for game identity by inference. |
+| `Security:RequireKey` | `true` | Every API call needs a key. `false` is for development only. |
+| `Security:KeyStoreFile` | `<app>\keys.json` | The key hashes. Back it up. |
+| `Security:DefaultRatePerMinute`, `DefaultBurst`, `DefaultMaxInFlight` | `120`, `20`, `4` | Limits of a key that has no limits of its own. |
+| `Security:MaxLiveStreamsPerKey` | `4` | Open event streams per key. |
+| `Security:CorsOrigins` | none | Exact origins that may call from a browser (the web UI), e.g. `["https://app.example.org"]`. No wildcard. |
+| `Security:Https:Enabled`, `Port`, `PfxPath` | off, `443` | HTTPS in Kestrel. The PFX password comes from the environment variable `TTC_PFX_PASSWORD` (or `Security:Https:PfxPassword`; prefer the variable). |
+| `Security:Https:Hsts` | `true` | `Strict-Transport-Security` on HTTPS answers. |
+| `Security:BehindTlsProxy` | `false` | Set to `true` only when a reverse proxy terminates TLS in front of a non-loopback listener. Without HTTPS or this flag the server **refuses to start** on a non-loopback address (keys would travel in clear text). |
+| `Security:AllowLoopbackWithoutKey` | `false` | Development only: callers on 127.0.0.1 need no key (they act as the key `local-dev`). Needs a loopback `Host`. |
+| `Proxy:PythonUrl`, `TimeoutSeconds` | `http://127.0.0.1:5001`, `120` | The Python app behind `/api/*`. A Python app that is down answers 502, a slow one 504. |
 
-Example `appsettings.json` next to the executable:
+Example `appsettings.json` for the internet-facing server:
 
 ```json
-{ "Engine": { "Port": 5300, "Workers": 16, "QueueLimit": 256, "QueueWaitMs": 60000,
-              "CardDbPath": "C:\\ttc\\data\\幻卡数据库.csv" } }
+{ "Server": {
+    "Host": "0.0.0.0", "HttpEnabled": false, "Workers": 16, "CardDbPath": "C:\\ttc\\data\\幻卡数据库.csv",
+    "GameLog": { "Directory": "D:\\ttc-data\\gamelogs", "RetentionDays": 30 },
+    "Security": { "KeyStoreFile": "D:\\ttc-data\\keys.json", "CorsOrigins": [ "https://app.example.org" ],
+                  "Https": { "Enabled": true, "Port": 443, "PfxPath": "D:\\ttc-data\\server.pfx" } },
+    "Proxy": { "PythonUrl": "http://127.0.0.1:5001" } } }
 ```
 
-**Why a deep queue and a long wait.** The Python solver is no longer a way out, and it was about 100 times slower per search anyway, so a request is better
-off waiting for a free worker. A request that waits is dropped without a search if its HTTP connection has been closed meanwhile (the client gave up);
-a search that is already running is never interrupted. Size the wait to the longest delay your game clients accept: a request that has waited `queue-wait-ms`
-gets 503 `busy`, and a full queue answers 503 `busy` at once.
+Run it once by hand: `C:\ttc\server\TTC.Siren.Server.exe`; it prints the listening addresses, the workers and the SHA-256 of the card database.
 
-**Garbage collector.** The engine runs with **Server GC, non-concurrent**, written explicitly in the project file and visible in the published `TTC.Siren.Engine.runtimeconfig.json`
-(`"System.GC.Server": true`, `"System.GC.Concurrent": false`); `/v1/health` reports `serverGc`. It was chosen by measurement (`docs/reports/phase7/gc/gc_table.txt`,
-`docs/reports/PHASE7_HARDENING.md` section 7): equal to workstation GC for openings and mid-games, faster for the very short robust-endgame requests on the P-cores, same memory.
-Server GC keeps one heap per logical CPU it may use; on the 32-thread server that is 32 small heaps, which was not measured there. If memory matters more than throughput,
-`DOTNET_gcServer=0` in the engine's environment switches to workstation GC without a rebuild.
+**Garbage collector.** The server runs with Server GC, non-concurrent (as the engine did; chosen by measurement in Phase 7 hardening). `DOTNET_gcServer=0` switches to workstation GC without a rebuild if memory matters more than throughput.
 
-Run it once by hand to see that it works:
+## 4. API keys
+
+Keys are random 256-bit values; the server stores only their SHA-256. Manage them with the server binary (the running server notices a change within a second):
 
 ```
-C:\ttc\engine\TTC.Siren.Engine.exe --workers 16 --card-db C:\ttc\data\幻卡数据库.csv
+TTC.Siren.Server.exe keys add --name alice --rate 120 --burst 20 --inflight 4     prints the key ONCE
+TTC.Siren.Server.exe keys list                                                      id, name, state, limits, hash prefix
+TTC.Siren.Server.exe keys set-limit alice --rate 60 --inflight 2
+TTC.Siren.Server.exe keys revoke alice                                              the key is answered 403 from now on
 ```
 
-It prints the listening address, the number of workers and the SHA-256 of the card database.
+Hand the key to the user over a safe channel; it cannot be recovered (revoke and issue a new one). The plugin sends it as `Authorization: Bearer <key>` or `X-Api-Key: <key>`.
+A key never appears in the server's logs (an unknown key is logged by its first characters only; a revoked key by its public id `k-xxxxxxxx`). The game logs of a key are stored under its public id.
+Over the limit: HTTP 429 with `Retry-After`. `POST /admin/reload-keys` and `GET /admin/status` are served to callers on the same machine only (and never through a proxy: a request with `X-Forwarded-For` is refused).
 
-## 4. Run it as a Windows service
+## 5. HTTPS
 
-The executable supports the Windows service host (`UseWindowsService`), so `sc.exe` can run it directly. In an elevated prompt:
+**With a certificate you have (PFX):** set `Security:Https` as above and the password in the machine environment variable `TTC_PFX_PASSWORD`. Kestrel serves TLS itself; HSTS is sent.
 
-```
-sc.exe create TTCSirenEngine binPath= "C:\ttc\engine\TTC.Siren.Engine.exe --workers 16 --card-db C:\ttc\data\幻卡数据库.csv" start= auto DisplayName= "TTC Siren engine"
-sc.exe description TTCSirenEngine "C# solver for the TTC Siren ai_server (127.0.0.1 only)"
-sc.exe failure TTCSirenEngine reset= 86400 actions= restart/5000/restart/5000/restart/30000
-sc.exe start TTCSirenEngine
-```
+**With Let's Encrypt (win-acme):** run `wacs.exe`, create a certificate for the DNS name with the "Manual input / export PFX" target, write the PFX to the folder named in `PfxPath`, and
+let win-acme's scheduled task renew it. The server reads the certificate at start: restart the service after a renewal (win-acme can run `sc.exe stop TTCSirenServer & sc.exe start TTCSirenServer` as an installation script).
 
-(There must be a space after each `=`.) Use a service account that can read the folder; the engine needs no network permissions and no write access.
-To change the settings: `sc.exe stop`, edit `appsettings.json` (or `sc.exe config TTCSirenEngine binPath= ...`), `sc.exe start`.
-To remove it: `sc.exe stop TTCSirenEngine` and `sc.exe delete TTCSirenEngine`.
+**Behind IIS / nginx / Caddy:** let the proxy terminate TLS and forward to `http://127.0.0.1:5000`; keep `Host` loopback, or set `Security:BehindTlsProxy=true` for another interface. Forward the `Authorization` header, allow response streaming for `/v1/live`
+(disable response buffering, long read timeout), and do **not** publish `/admin/*`.
 
-## 5. Firewall
+## 6. Services
 
-Nothing to open. The engine listens on `127.0.0.1` only, so Windows Firewall needs no inbound rule and the port is not reachable from the network.
-Do **not** use `--allow-remote` unless you add your own authentication and network controls in front of it.
-
-## 6. Python server settings
-
-All optional, read from environment variables of the Python process (set them as machine/service variables, then restart the Python server):
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `TTC_CS_ENGINE` | `on` | `off` (also `0`, `false`, `no`) is the **manual** switch: the minimax solver then runs in Python exactly as before Phase 7 and the engine is never contacted. It is never set automatically. |
-| `TTC_CS_ENGINE_URL` | `http://127.0.0.1:5300` | Where the engine listens. |
-| `TTC_CS_ENGINE_CONNECT_TIMEOUT` | `0.5` | Seconds to wait for the connection. On Windows a refused connection to a closed port can take longer than this; it is then reported as `connection_failed`. |
-| `TTC_CS_ENGINE_READ_MARGIN` | `5` | Seconds added to `max_time` + the engine's queue wait (from `/v1/health`) for the read timeout of a solve. With the defaults a request waits at most 10 + 60 + 5 = 75 s. |
-| `TTC_CS_ENGINE_POOL_SIZE` | `32` | Idle keep-alive connections the Python process keeps to the engine (one process-wide pool, reused by every request thread). More connections may be open during a burst; the surplus is closed afterwards. |
-| `TTC_RECORD_REQUESTS` | unset | If set to a folder, every `/ai_move` request is stored there with the state of Python's random generator (for replay). **This stores users' requests**; use it only where that is acceptable. |
-
-(`TTC_CS_ENGINE_BACKOFF` of Phase 7 no longer exists: there is no circuit breaker. A failure never disables the engine; the next request tries again and the health is
-verified again after any connection-level failure.)
-
-**What the game client receives when the engine cannot answer** (the Python solver is not run):
+The C# server runs as a Windows service directly (`UseWindowsService`). In an elevated prompt:
 
 ```
-HTTP 503   {"error": "C# engine: busy (queue_full)", "engine": "csharp", "engine_error": "busy"}
+sc.exe create TTCSirenServer binPath= "C:\ttc\server\TTC.Siren.Server.exe" start= auto DisplayName= "TTC Siren server"
+sc.exe failure TTCSirenServer reset= 86400 actions= restart/5000/restart/5000/restart/30000
+sc.exe start TTCSirenServer
 ```
 
-| `engine_error` | HTTP | Meaning |
-|---|---|---|
-| `connection_failed` | 503 | The engine is not running or not reachable (also a connect timeout, a reset connection). |
-| `timeout` | 503 | No answer within `max_time` + queue wait + margin. |
-| `busy` | 503 | The engine's queue is full (`queue_full`) or the request waited `queue-wait-ms` (`queue_timeout`). |
-| `engine_error` | 503 | The engine reported an internal error (its HTTP 500). |
-| `invalid_request` | 503 | The engine rejected the position (its HTTP 400). |
-| `malformed_response`, `http_error`, `unexpected_status` | 503 | The answer was not what the protocol says. |
-| `protocol_mismatch`, `card_db_mismatch`, `health_failed` | 503 | The engine is another version, loaded another card database, or its health check failed. Not cached: a corrected engine is accepted by the next request. |
-| `illegal_move` | 503 | The engine's move is not legal for the position (should not happen; keep the request, see `TTC_RECORD_REQUESTS`). |
-| `unsupported_parameter` | 400 | `max_depth` / `max_time` of the request is not a number (the Python solver would have raised a TypeError). A bool counts as the integer it is in Python. |
-| `client_error` | 500 | A defect in the Python client code itself. |
+(a space after each `=`). Set the machine environment variables (`TTC_PFX_PASSWORD`, `TTC_Server__...`) before starting. The service account needs read access to the application folder and the PFX, and write access to the game-log folder and the key file.
 
-A successful engine answer carries `"engine": "csharp"` and `engine_info`; with `TTC_CS_ENGINE=off` neither field is present.
-
-**Monitoring.** Every failure is logged by the logger `ttc.engine` at **error** level (`C# engine failed (<code>): <detail>`); alert on these lines. The engine's
-`GET /v1/health` shows the live state: `idleWorkers`, `queued`, `queueLimit`, `queueWaitMs`, `busyAnswers` (requests answered `busy`), `abandonedSkipped`
-(queued requests dropped because the client had gone), `served`, `workersCreated`, `tableMemoryBytes`, `serverGc`. A growing `queued` with no idle workers
-means the engine needs more workers or the traffic is too high.
-
-**Front end.** `python app.py` still starts Flask's development server (`app.run(threaded=True)`, one thread per request) and works with the connection
-pool. The recommended production front end is the optional launcher `serve_waitress.py`, which serves the same application with waitress and a fixed thread pool:
+The Python app is a script, not a service: run it with waitress through a service wrapper such as NSSM:
 
 ```
-pip install waitress
-python serve_waitress.py --host 127.0.0.1 --port 5000 --threads 16        (add --no-console when running as a service)
+nssm install TTCSirenPython "C:\Python311\python.exe" "C:\ttc\python\serve_waitress.py --host 127.0.0.1 --port 5001 --threads 8 --no-console"
+nssm set TTCSirenPython AppDirectory C:\ttc\python
+nssm start TTCSirenPython
 ```
 
-It performs the same initialisation as `app.py` and does not change `app.py`. `--threads` is the number of requests one Python process works on at once.
+The Python app listens on loopback only. Start order does not matter: until the Python app is up, the three `/api/*` endpoints answer 502 and `/ai_move` is unaffected.
 
-## 7. Health check, start order, switching off, rollback
+## 7. Firewall
 
-* **Health check:** `Invoke-RestMethod http://127.0.0.1:5300/v1/health` (or `curl`). Expected: `"status":"ok"`, `"protocol":1`, the card-database `cardDbSha256`,
-  `workers`, `idleWorkers`, `queued`, `busyAnswers`. The hash must equal the SHA-256 of the CSV the Python server loads
-  (`Get-FileHash C:\ttc\data\幻卡数据库.csv -Algorithm SHA256`).
-* **Start order:** engine first, then the Python server. If the Python server starts first, its minimax requests answer 503 `connection_failed` until the engine
-  is up; the first request after that verifies the health and works (no waiting period).
-* **Switch the engine off** (manual, by the operator): set `TTC_CS_ENGINE=off` for the Python server and restart it; the Python solver then answers minimax
-  requests (about 100 times slower). Use it on any machine without an engine and as an emergency measure; it is never switched on or off automatically.
-* **Roll back:** `TTC_CS_ENGINE=off` restores the behaviour of the code before Phase 7 exactly (verified on the whole request corpus); no data is written by the engine.
+Open **inbound TCP 443 only**. The C# server's plain port (5000) and the Python app (5001) must not be reachable from outside; with `HttpEnabled=false` the first does not even exist.
 
-## 8. Choosing the number of workers, memory
+```
+netsh advfirewall firewall add rule name="TTC Siren HTTPS" dir=in action=allow protocol=TCP localport=443
+```
 
-Every worker owns a transposition table (96 MiB by default) and a small memo (0.75 MiB), created when the worker is first needed (an idle engine uses about 50 MiB). The pages of a table are
-touched as searches fill it, so the working set grows towards 96.75 MiB per worker. Measured on the development machine after the full load matrix:
+Check from another machine that 5000 and 5001 are closed, and that `http://<server>/` does not answer.
 
-| Workers | Working set measured (MiB) | Upper bound: workers × 96.75 MiB + 100 MiB |
-|---|---|---|
-| 1 | 164 | 0.2 GiB |
-| 4 | 461 | 0.5 GiB |
-| 8 | 845 | 0.9 GiB |
-| 12 | 1,233 | 1.3 GiB |
-| 20 | 1,622 | 2.0 GiB |
+## 8. Health, logs, backup, rollback
 
-For the server (not measured there): 16 workers need at most about 1.7 GiB and 32 workers at most about 3.2 GiB; plan on the upper bound. With `--tt-entries 1048576` (24 MiB) the tables take a quarter of that.
-16 GB is ample either way.
+* **Health:** `GET /health` (no key): status, version, card-database SHA-256, workers, idle workers, queue length, `busyAnswers`. Alert when `queued` stays above 0 with no idle worker.
+* **Logs:** the console/Windows event log at warning level (rejected keys, damaged log files). Request logging is off; nothing identifies a user except the key id.
+* **Back up** `keys.json` and the game-log folder (the logs are users' data: protect them like a database; deleting a user's games is `DELETE /v1/games/{id}` with their key, or deleting the files).
+* **Roll back:** stop the C# server and point the plugin at the old Python server. Game logs and keys are only read by the C# server.
 
-**How to pick the number on the server itself** (E5-2698B v3: 16 cores / 32 threads, 16 GB). The search is CPU bound and each worker runs one single-threaded search, so
-throughput grows with the number of workers up to about the number of physical cores and then flattens; more workers than that only raise latency.
+## 9. Workers, memory, scheduling
 
-1. Install the runtime, publish the engine (sections 1 and 2) and make sure Python 3 is available.
-2. From the repository on the server, generate the request payloads once: `python tools\phase7\gen_corpus.py --out tools\phase7\corpus\corpus_s20261010_n360.json` and
-   `python tools\phase7\e2e_reference.py --corpus tools\phase7\corpus\corpus_s20261010_n360.json --out tools\parity\golden\e2e_reference_g1_s20261010_n360.jsonl.gz`.
-3. Run the matrix for the worker counts you want to compare, with all CPUs:
-   `python tools\phase7\run_load_matrix.py --cpu all --workers 4,8,16,24,32 --concurrency 1,4,8,16,24,32 --out C:\temp\load_server.jsonl`
-   (add `--flask` to also measure the whole Flask path). It starts the engine for every worker count, replays openings, mid-games and robust endgames with the production
-   settings (`max_depth` 10, `max_time` 10 s) and prints one JSON line per cell: requests per second and latency p50/p95/p99/max.
-4. Choose the smallest worker count after which requests per second no longer grow noticeably (expect the knee near 16, and the 32 hardware threads to add little).
-   Keep the p95 latency below `max_time` plus a few seconds: when the machine is oversubscribed, searches run into their time limit and play weaker.
-5. Set `--workers` accordingly (section 4). Do **not** keep the queue short in the hope that Python takes the overflow: there is no fallback, and Python would be about
-   100 times slower anyway. Keep the defaults (`--queue 256 --queue-wait-ms 60000`) or size the wait to what your game clients accept; a request that waits is answered
-   by the engine, and only a full queue or an expired wait gives 503 `busy`.
+Every worker owns a transposition table (96 MiB by default) and a small memo, created when the worker is first needed. Working sets measured on the development machine: 1 worker 164 MiB, 4 workers 461 MiB, 8 workers 845 MiB, 12 workers 1.2 GiB, 20 workers 1.6 GiB; plan on workers × 97 MiB + 100 MiB as the upper bound (16 workers ≈ 1.7 GiB; 32 ≈ 3.2 GiB).
+The search is CPU bound and each worker runs one single-threaded search: throughput grows with the number of workers up to about the number of physical cores (expect the knee near 16 on the 16-core E5-2698B v3).
+Measure on the server with `python tools\phase8a\load_server.py --target server --cpu all --workers N` for several N (it creates its own key and key file), and keep the p95 latency of openings below `max_time` plus a few seconds.
+The scheduling probe of the review is reproduced by `SchedulerTests` (`dotnet test --filter SchedulerTests`); see `docs/reports/PHASE8A_REPORT.md` for the figures.
 
-The numbers measured on the development machine (i7-13650HX, 6 P-cores + 8 E-cores) are **not** predictions for the server.
+## 10. Troubleshooting
 
-## 9. Troubleshooting
-
-| Symptom (HTTP 503 unless noted) | Likely cause |
+| Symptom | Likely cause |
 |---|---|
-| `"engine_error": "card_db_mismatch"` | The engine loaded another CSV. Pass the same absolute path with `--card-db`. |
-| `"engine_error": "protocol_mismatch"` | The engine and the Python files are from different versions; redeploy both. |
-| `"engine_error": "busy"` | The queue is full (`queue_full`) or the wait ran out (`queue_timeout`). Raise `--workers` (if CPUs allow) or `--queue` / `--queue-wait-ms`, or reduce the traffic. |
-| `"engine_error": "connection_failed"` | The engine is not running or not answering; check the service and the health URL. On a machine without an engine set `TTC_CS_ENGINE=off`. |
-| `"engine_error": "timeout"` | The engine did not answer within `max_time` + queue wait + margin; look at `queued` / `idleWorkers` in the health. |
-| `"engine_error": "illegal_move"` | The engine returned a move that Python's state does not allow (should not happen; please keep the recorded request, see `TTC_RECORD_REQUESTS`). |
-| `"engine_error": "unsupported_parameter"` (HTTP 400) | `max_depth` / `max_time` in the request is not a number. |
-| The engine does not start: "Refusing to listen on non-loopback address" | Intended. Use `127.0.0.1`. |
+| The server does not start: "Refusing to listen on … without HTTPS" | Intended. Enable `Security:Https`, or set `Security:BehindTlsProxy=true` behind a TLS proxy, or use a loopback `Host`. |
+| 401 `API key required` / `invalid API key` | No key, or a mistyped one. Header: `Authorization: Bearer ttc_…` or `X-Api-Key`. |
+| 403 `API key revoked` | The key was revoked (`keys list` shows it). Issue a new one. |
+| 429 | The key's rate or in-flight limit; honour `Retry-After`; raise it with `keys set-limit`. |
+| 503 `busy` (`queue_full` / `queue_timeout`) | All workers busy and the queue full or the wait expired. Raise `Workers` (if CPUs allow), `QueueLimit` / `QueueWaitMs`, or reduce the traffic. |
+| 503 `invalid_request` | The engine rejected the position (for example the side to move has no cards). |
+| 502 on `/api/*` | The Python app is down or `Proxy:PythonUrl` is wrong. |
+| 504 on `/api/*` | The Python app took longer than `Proxy:TimeoutSeconds`. |
+| `/v1/live` stops without a message | A proxy buffers or times out the stream; disable buffering and raise the read timeout. |
+| No explanation in the answer, `explanation_error` instead | The facts could not be computed; the move is unaffected. Please keep the request and its `game_id`; the log has everything to replay it. |

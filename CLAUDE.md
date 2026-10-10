@@ -87,7 +87,8 @@ csharp/                      C# 解决方案根目录
   src/TTC.Siren.Bench/       benchmark 控制台
   src/TTC.Siren.Engine/      引擎库 + 本机 HTTP 引擎服务（Phase 7；ASP.NET Core，只监听 127.0.0.1；工作线程池与求解服务 `SolveService` 在此，Server 项目在进程内复用；A-20：出错不再回退 Python）
   src/TTC.Siren.Compat/      Phase 8A：与 Python 兼容的请求层——CPython 兼容随机数 `PythonRandom`（MT19937）、Python 对象模型（`Legacy*`，只用于请求期兼容层，不在搜索热路径）、请求解析、未知牌采样（`UnknownCardHandler`）、旧版分析文案（`LegacyAnalysis`）、`PyJson`
-  src/TTC.Siren.Server/      Phase 8A：产品服务器（ASP.NET Core）：原生 `/ai_move`、解释事实、对局日志、实时事件、密钥/限流/HTTPS、`/api/*` 代理
+  src/TTC.Siren.Explain/     Phase 8A：解释事实 v2（翻牌原因、暴露、主变例、备选、残局、未知牌、可信度）与中文模板文案（模板是数据文件）
+  src/TTC.Siren.Server/      Phase 8A：产品服务器（ASP.NET Core）：原生 `/ai_move`、对局日志、实时事件（SSE）、API 密钥/限流/HTTPS/CORS、`/api/*` 代理、占位页
   tests/TTC.Siren.Tests/     xUnit 单元测试 + parity 测试
 tools/parity/                Python 侧 golden 数据生成脚本（只读调用 reference 实现）
 tools/phase7/                Phase 7 的语料、端到端参考、延迟与压测脚本

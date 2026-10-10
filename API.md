@@ -525,7 +525,12 @@ POST /api/draft/analyze  {mode: "decks", candidates: [deck1, deck2, deck3], extr
 HTTP 状态码：
 - `200` — 成功
 - `400` — 请求参数不合法
+- `401` — 云端服务器：没有 API 密钥或密钥无效（见 §5.4）
+- `403` — API 密钥已被吊销
+- `429` — 超过该密钥的速率或并发限制，见响应头 `Retry-After`
 - `500` — 服务器内部错误
+- `502` / `504` — `/api/*`：后端 Python 服务不可达 / 超时
+- `503` — 求解引擎繁忙或拒绝了局面（`engine_error`）
 
 引擎相关错误（A-20：不再回退到 Python 求解）：`{"error": "C# engine: <原因>(<说明>)", "engine": "csharp", "engine_error": "<原因>"}`，HTTP 503（引擎繁忙 `busy`、请求被引擎拒绝 `invalid_request`、引擎内部错误 `engine_error` 等）；`max_depth`/`max_time` 不是数字 → HTTP 400，`engine_error: "unsupported_parameter"`。请求体不是合法 JSON → HTTP 400 `Invalid input data`（Python 版此时返回 500，见 `CSHARP_MIGRATION.md` D-020）。
 
@@ -560,4 +565,13 @@ HTTP 状态码：
 ### 5.3 实时事件流
 
 `GET /v1/live[?game_id=<id>]`，Server-Sent Events，只推送该密钥自己的事件：`request.received`（收到请求，含局面）、`search.depth`（每完成一层：深度、评分、最佳走法、节点数、用时）、`robust.progress`（残局信息集开始/结束）、`decision`（走法与简要解释）、`game.updated`（写入日志的记录）、`game.ended`。落后的客户端会丢弃最旧的事件并收到 `lagged` 通知（含丢弃数量），服务器不会因慢客户端而变慢。每 15 秒有一条心跳注释。
+
+### 5.4 云端服务器：认证、限流、HTTPS
+
+- **地址：** 云端部署后基地址是 `https://<你的域名>`（不再是 `http://127.0.0.1:5000`）；证书由服务器配置。
+- **API 密钥：** 每个用户一个密钥，由运维用 `TTC.Siren.Server keys add --name <用户>` 生成，**只显示一次**。请求头二选一：`Authorization: Bearer <密钥>` 或 `X-Api-Key: <密钥>`。没有密钥或密钥不对 → `401`（响应头 `WWW-Authenticate: Bearer`）；密钥已吊销 → `403`。`/health` 与首页 `/` 不需要密钥。
+- **限流：** 每个密钥一个令牌桶（每分钟速率 + 突发量）和最大并发请求数；超过时 `429`，body `{"error": "...", "retry_after_seconds": n}`，响应头 `Retry-After: n`。`/v1/live` 另有每个密钥的同时打开流数限制。
+- **`/api/recommend`、`/api/draft/analyze`、`/api/winrate`：** 由云端服务器转发到本机 Python 服务，请求/响应原样，需要同样的密钥；Python 服务不可达返回 `502 {"error": "the Python app is not reachable"}`，超时返回 `504`。其他 `/api/*` 路径不转发（`404`）。
+- **浏览器跨域：** 只允许运维配置的精确来源（没有通配符），预检请求（`OPTIONS`）对其他来源返回 `403`。
+- **隐私：** 对局日志保存在服务器上，按密钥隔离，默认保留 30 天；用户可用自己的密钥下载或删除（§5.2）。服务器的日志里永远不会出现完整密钥。
 
