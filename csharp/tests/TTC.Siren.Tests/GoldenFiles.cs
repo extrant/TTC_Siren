@@ -119,16 +119,36 @@ internal static class GoldenFiles
     {
         lock (Gate)
         {
-            var psi = new ProcessStartInfo("python") { WorkingDirectory = RepoRoot, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-            psi.Environment["PYTHONIOENCODING"] = "utf-8";
-            psi.ArgumentList.Add(script);
-            foreach (string a in args) psi.ArgumentList.Add(a);
-            using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Could not start python");
-            string stdout = proc.StandardOutput.ReadToEnd();
-            string stderr = proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-            if (proc.ExitCode != 0) throw new InvalidOperationException($"{script} failed (exit {proc.ExitCode}):{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+            var arguments = new List<string> { script };
+            arguments.AddRange(args);
+            var (exitCode, stdout, stderr) = RunPythonProcess(arguments);
+            if (exitCode != 0) throw new InvalidOperationException($"{script} failed (exit {exitCode}):{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
         }
+    }
+
+    /// <summary>
+    /// Runs <c>python &lt;arguments&gt;</c> in the repository root and returns its exit code and everything it wrote. Review M7-3: stdout
+    /// and stderr are read concurrently (both asynchronously, then <c>WaitForExit</c>). Reading one stream to the end before the other
+    /// deadlocks as soon as the child fills the pipe the harness is not reading: a generator that logs a lot to stderr hung the
+    /// regeneration of the e2e golden for 35 minutes.
+    /// </summary>
+    internal static (int ExitCode, string StdOut, string StdErr) RunPythonProcess(IReadOnlyList<string> arguments)
+    {
+        var psi = new ProcessStartInfo("python")
+        {
+            WorkingDirectory = RepoRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+        foreach (string a in arguments) psi.ArgumentList.Add(a);
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Could not start python");
+        var stdout = proc.StandardOutput.ReadToEndAsync();
+        var stderr = proc.StandardError.ReadToEndAsync();
+        proc.WaitForExit();
+        Task.WaitAll(stdout, stderr);
+        return (proc.ExitCode, stdout.Result, stderr.Result);
     }
 
     /// <summary>
@@ -173,25 +193,14 @@ internal static class GoldenFiles
             string tmp = path + ".tmp";
             if (File.Exists(tmp)) File.Delete(tmp);
 
-            var psi = new ProcessStartInfo("python")
-            {
-                WorkingDirectory = RepoRoot,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            psi.Environment["PYTHONIOENCODING"] = "utf-8";
             // Split the template first so a path containing spaces stays a single argument.
-            psi.ArgumentList.Add(script.Contains('/') ? script : Path.Combine("tools", "parity", script));
+            var arguments = new List<string> { script.Contains('/') ? script : Path.Combine("tools", "parity", script) };
             foreach (string part in argsTemplate.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-                psi.ArgumentList.Add(part.Contains("{0}") ? tmp : part == "@@CORPUS@@" ? E2eCorpusPath : part);
+                arguments.Add(part.Contains("{0}") ? tmp : part == "@@CORPUS@@" ? E2eCorpusPath : part);
 
-            using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Could not start python");
-            string stdout = proc.StandardOutput.ReadToEnd();
-            string stderr = proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-            if (proc.ExitCode != 0 || !File.Exists(tmp))
-                throw new InvalidOperationException($"Golden generation failed (exit {proc.ExitCode}):\n{stdout}\n{stderr}");
+            var (exitCode, stdout, stderr) = RunPythonProcess(arguments);
+            if (exitCode != 0 || !File.Exists(tmp))
+                throw new InvalidOperationException($"Golden generation failed (exit {exitCode}):\n{stdout}\n{stderr}");
             File.Move(tmp, path);
         }
     }
