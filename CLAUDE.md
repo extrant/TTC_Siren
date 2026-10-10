@@ -85,9 +85,13 @@ csharp/                      C# 解决方案根目录
   src/TTC.Siren.Core/        卡牌数据、规则、GameState、MakeMove/UndoMove
   src/TTC.Siren.Search/      评估、排序、Minimax/AlphaBeta/ID、TT、残局
   src/TTC.Siren.Bench/       benchmark 控制台
-  src/TTC.Siren.Engine/      本机 HTTP 引擎服务（Phase 7；ASP.NET Core，只监听 127.0.0.1；Python ai_server 的 minimax 路径调用它，出错时回退到 Python）
+  src/TTC.Siren.Engine/      引擎库 + 本机 HTTP 引擎服务（Phase 7；ASP.NET Core，只监听 127.0.0.1；工作线程池与求解服务 `SolveService` 在此，Server 项目在进程内复用；A-20：出错不再回退 Python）
+  src/TTC.Siren.Compat/      Phase 8A：与 Python 兼容的请求层——CPython 兼容随机数 `PythonRandom`（MT19937）、Python 对象模型（`Legacy*`，只用于请求期兼容层，不在搜索热路径）、请求解析、未知牌采样（`UnknownCardHandler`）、旧版分析文案（`LegacyAnalysis`）、`PyJson`
+  src/TTC.Siren.Server/      Phase 8A：产品服务器（ASP.NET Core）：原生 `/ai_move`、解释事实、对局日志、实时事件、密钥/限流/HTTPS、`/api/*` 代理
   tests/TTC.Siren.Tests/     xUnit 单元测试 + parity 测试
 tools/parity/                Python 侧 golden 数据生成脚本（只读调用 reference 实现）
+tools/phase7/                Phase 7 的语料、端到端参考、延迟与压测脚本
+tools/phase8a/               Phase 8A 的 golden 生成器（RNG、解析、采样、端到端、数字格式）、请求语料生成器、HTTP 延迟脚本
 ```
 
 - Python reference 代码不因 C# 迁移而改动；parity 工具只 import Python 模块，不修改它们。

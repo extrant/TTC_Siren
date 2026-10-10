@@ -102,10 +102,10 @@
   "myOwner": 1,              // int            — 1=蓝方, 2=红方
   "currentPlayer": 1,        // int            — 1=蓝方回合, 2=红方回合, 0=未知
   "rules": "全明牌,加算,同数", // str           — 逗号分隔规则；"全明牌"/"三明牌" 控制明牌模式
-  "solver": "minimax",       // str            — "minimax" 或 "monte_carlo"
+  "solver": "minimax",       // str            — "minimax"；"monte_carlo" 已下线，仍可传，但由 minimax 引擎回答（见下）
   "max_depth": 10,           // int            — Minimax 最大思考深度
   "max_time": 10,            // float          — Minimax 最大思考秒数
-  "mc_simulations": 150,     // int            — 蒙特卡洛模拟次数（仅 monte_carlo 有效）
+  "mc_simulations": 150,     // int            — 已忽略（蒙特卡洛已下线，仅为兼容旧客户端保留）
   "show_search_progress": false  // bool       — 是否返回搜索进度详情
 }
 ```
@@ -122,10 +122,10 @@
 | `myOwner` | int | 是 | `1`=蓝方, `2`=红方 |
 | `currentPlayer` | int | 否 | 当前回合：`1`=蓝方, `2`=红方, `0`=自动推断 |
 | `rules` | str | 否 | 逗号分隔规则，"全明牌"/"三明牌" 控制对手手牌可见度 |
-| `solver` | str | 否 | 求解器类型，默认 `"minimax"` |
+| `solver` | str | 否 | 求解器类型，默认 `"minimax"`。`"monte_carlo"` 已下线（Phase 8A，决定 A-22）：请求照常被接受，由 minimax 引擎（含精确/信息集残局）回答，响应追加 `solver_used`、`solver_note` |
 | `max_depth` | int | 否 | Minimax 最大思考深度，默认 10 |
 | `max_time` | float | 否 | Minimax 最大思考秒数，默认 10 |
-| `mc_simulations` | int | 否 | 蒙特卡洛模拟次数，默认 150 |
+| `mc_simulations` | int | 否 | 已忽略（蒙特卡洛已下线） |
 | `show_search_progress` | bool | 否 | 默认 false，开启后在响应中附加搜索过程数据 |
 
 > **棋盘位置约定：** `pos: [行, 列]`，`[0, 0]` 为左上角，`[2, 2]` 为右下角。
@@ -184,6 +184,11 @@
 | `win_probability` | Object | `current`=当前胜率, `after_move`=落子后胜率, `confidence`=置信度 |
 | `recommendation` | Object | 走法理由 + 3 个备选方案 |
 | `performance_stats` | Object | 搜索性能统计 |
+| `engine` / `engine_info` | str / Object | 恒为 `"csharp"`；`engine_info` 含 `protocol`、`worker`、`robust`（是否运行了信息集残局）、`overridden`（残局层是否改了走法）、`scenarios`、`timings` |
+| `search_progress` / `search_summary` | Object[] / Object | 仅当请求 `show_search_progress` 为真时出现：每完成一层一条（`depth`、`max_depth`、`best_move`、`best_score`、`nodes_searched`、`time_elapsed`、`time_remaining`、`nodes_per_second`、`tt_hit_rate`、`cutoff_rate`、`branching_factor`）与汇总 |
+| `solver_used` / `solver_note` | str | **追加字段**：仅当请求的 `solver` 为 `"monte_carlo"` 时出现；`solver_used` 为 `"minimax"`，`solver_note` 是中文说明 |
+
+> **兼容性约定（Phase 8A）：** 以上所有字段的键名、取值类型与含义都与 Python 版 `ai_server` 在引擎路径上的响应一致（数字按 Python 的浮点写法输出，例如 `1.0`、`0.45`）；新版只会 **追加** 字段，不会改名或删除。无合法走法时返回 `{"move": null, "msg": "无可用动作", "engine": "csharp"}`（HTTP 200）。
 
 ---
 
@@ -521,6 +526,8 @@ HTTP 状态码：
 - `200` — 成功
 - `400` — 请求参数不合法
 - `500` — 服务器内部错误
+
+引擎相关错误（A-20：不再回退到 Python 求解）：`{"error": "C# engine: <原因>(<说明>)", "engine": "csharp", "engine_error": "<原因>"}`，HTTP 503（引擎繁忙 `busy`、请求被引擎拒绝 `invalid_request`、引擎内部错误 `engine_error` 等）；`max_depth`/`max_time` 不是数字 → HTTP 400，`engine_error: "unsupported_parameter"`。请求体不是合法 JSON → HTTP 400 `Invalid input data`（Python 版此时返回 500，见 `CSHARP_MIGRATION.md` D-020）。
 
 常见错误场景：
 

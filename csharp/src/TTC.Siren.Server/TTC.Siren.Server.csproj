@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>TTC.Siren.Server</RootNamespace>
+    <AssemblyName>TTC.Siren.Server</AssemblyName>
+    <!-- Same GC choice as the engine (Phase 7 hardening L7-1, measured): Server GC, non-concurrent. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TTC.Siren.Core\TTC.Siren.Core.csproj" />
+    <ProjectReference Include="..\TTC.Siren.Search\TTC.Siren.Search.csproj" />
+    <ProjectReference Include="..\TTC.Siren.Compat\TTC.Siren.Compat.csproj" />
+    <ProjectReference Include="..\TTC.Siren.Engine\TTC.Siren.Engine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>
