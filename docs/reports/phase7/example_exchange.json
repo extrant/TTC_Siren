@@ -1,0 +1,496 @@
+{
+ "request": {
+  "protocol": 1,
+  "rules": [
+   "逆转"
+  ],
+  "state": {
+   "cur": 1,
+   "board": [
+    [
+     35,
+     "兽人",
+     "r",
+     0,
+     6,
+     2,
+     6,
+     6,
+     6,
+     2,
+     6,
+     6,
+     1
+    ],
+    [
+     289,
+     null,
+     "b",
+     0,
+     7,
+     5,
+     8,
+     2,
+     7,
+     5,
+     8,
+     2,
+     1
+    ],
+    [
+     37,
+     "兽人",
+     "b",
+     0,
+     6,
+     6,
+     6,
+     2,
+     6,
+     6,
+     6,
+     2,
+     1
+    ],
+    null,
+    null,
+    null,
+    [
+     160,
+     "帝国",
+     "r",
+     0,
+     6,
+     3,
+     6,
+     3,
+     6,
+     3,
+     6,
+     3,
+     1
+    ],
+    [
+     255,
+     null,
+     "r",
+     0,
+     5,
+     1,
+     6,
+     1,
+     5,
+     1,
+     6,
+     1,
+     1
+    ],
+    null
+   ],
+   "hands": [
+    [
+     [
+      1467,
+      null,
+      "r",
+      0,
+      6,
+      6,
+      3,
+      8,
+      6,
+      6,
+      3,
+      8,
+      1
+     ],
+     [
+      188,
+      null,
+      "r",
+      0,
+      6,
+      3,
+      8,
+      3,
+      6,
+      3,
+      8,
+      3,
+      1
+     ],
+     [
+      188,
+      null,
+      "r",
+      0,
+      6,
+      3,
+      8,
+      3,
+      6,
+      3,
+      8,
+      3,
+      1
+     ]
+    ],
+    [
+     [
+      387,
+      null,
+      "b",
+      0,
+      10,
+      5,
+      2,
+      10,
+      10,
+      5,
+      2,
+      10,
+      1
+     ],
+     [
+      353,
+      null,
+      "b",
+      0,
+      6,
+      7,
+      8,
+      1,
+      6,
+      7,
+      8,
+      1,
+      1
+     ],
+     [
+      127,
+      null,
+      "b",
+      0,
+      7,
+      1,
+      7,
+      5,
+      7,
+      1,
+      7,
+      5,
+      1
+     ]
+    ]
+   ]
+  },
+  "aggressive": false,
+  "maxDepth": 4,
+  "maxTime": 10,
+  "robust": {
+   "aiPlayer": 1,
+   "opponent": 0,
+   "generated": [
+    [
+     1,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0
+    ]
+   ],
+   "sampleCount": 16,
+   "npcIds": [],
+   "handler": true,
+   "fallbackCandidates": null
+  }
+ },
+ "response": {
+  "protocol": 1,
+  "status": "ok",
+  "move": {
+   "slot": 2,
+   "row": 2,
+   "col": 2,
+   "cardId": 127
+  },
+  "standard": {
+   "move": {
+    "slot": 2,
+    "row": 1,
+    "col": 1,
+    "cardId": 127
+   },
+   "score": 6.0600000000000005,
+   "scoreBits": "40183D70A3D70A3E"
+  },
+  "depths": [
+   {
+    "depth": 1,
+    "move": {
+     "slot": 0,
+     "row": 2,
+     "col": 2,
+     "cardId": 387
+    },
+    "score": 13.175,
+    "scoreBits": "402A59999999999A",
+    "nodes": 13,
+    "nodesTotal": 13,
+    "ttHitsTotal": 0,
+    "cutoffsTotal": 0,
+    "elapsed": 0.0176458
+   },
+   {
+    "depth": 2,
+    "move": {
+     "slot": 1,
+     "row": 1,
+     "col": 0,
+     "cardId": 353
+    },
+    "score": 2.54,
+    "scoreBits": "400451EB851EB852",
+    "nodes": 75,
+    "nodesTotal": 88,
+    "ttHitsTotal": 1,
+    "cutoffsTotal": 9,
+    "elapsed": 0.017887
+   },
+   {
+    "depth": 3,
+    "move": {
+     "slot": 1,
+     "row": 1,
+     "col": 0,
+     "cardId": 353
+    },
+    "score": 10.74,
+    "scoreBits": "40257AE147AE147B",
+    "nodes": 100,
+    "nodesTotal": 188,
+    "ttHitsTotal": 14,
+    "cutoffsTotal": 28,
+    "elapsed": 0.0180737
+   },
+   {
+    "depth": 4,
+    "move": {
+     "slot": 2,
+     "row": 1,
+     "col": 1,
+     "cardId": 127
+    },
+    "score": 6.0600000000000005,
+    "scoreBits": "40183D70A3D70A3E",
+    "nodes": 343,
+    "nodesTotal": 531,
+    "ttHitsTotal": 48,
+    "cutoffsTotal": 133,
+    "elapsed": 0.0187742
+   }
+  ],
+  "totals": {
+   "nodes": 531,
+   "depthCompleted": 4,
+   "ttHits": 48,
+   "cutoffs": 133,
+   "rootMoves": 12,
+   "elapsed": 0.022509
+  },
+  "robust": {
+   "ran": true,
+   "scenarios": 16,
+   "robustMove": {
+    "slot": 2,
+    "row": 2,
+    "col": 2,
+    "cardId": 127
+   },
+   "overridden": true,
+   "exactNodes": 20748,
+   "exactMakeMoves": 20556,
+   "elapsed": 0.0421071,
+   "candidates": [
+    {
+     "move": {
+      "slot": 2,
+      "row": 2,
+      "col": 2,
+      "cardId": 127
+     },
+     "finalScore": -2.325,
+     "finalBits": "C00299999999999A",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C00299999999999A",
+     "cornerBits": "0000000000000000"
+    },
+    {
+     "move": {
+      "slot": 0,
+      "row": 1,
+      "col": 1,
+      "cardId": 387
+     },
+     "finalScore": -2.85625,
+     "finalBits": "C006D9999999999A",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "BFF0000000000000",
+     "cornerBits": "4028C00000000000"
+    },
+    {
+     "move": {
+      "slot": 0,
+      "row": 2,
+      "col": 2,
+      "cardId": 387
+     },
+     "finalScore": -3,
+     "finalBits": "C008000000000000",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C008000000000000",
+     "cornerBits": "0000000000000000"
+    },
+    {
+     "move": {
+      "slot": 2,
+      "row": 1,
+      "col": 2,
+      "cardId": 127
+     },
+     "finalScore": -3,
+     "finalBits": "C008000000000000",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C008000000000000",
+     "cornerBits": "0000000000000000"
+    },
+    {
+     "move": {
+      "slot": 1,
+      "row": 1,
+      "col": 1,
+      "cardId": 353
+     },
+     "finalScore": -3.58125,
+     "finalBits": "C00CA66666666666",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C001400000000000",
+     "cornerBits": "4023000000000000"
+    },
+    {
+     "move": {
+      "slot": 0,
+      "row": 1,
+      "col": 2,
+      "cardId": 387
+     },
+     "finalScore": -4.0125,
+     "finalBits": "C0100CCCCCCCCCCD",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C008000000000000",
+     "cornerBits": "401B000000000000"
+    },
+    {
+     "move": {
+      "slot": 1,
+      "row": 1,
+      "col": 2,
+      "cardId": 353
+     },
+     "finalScore": -4.425,
+     "finalBits": "C011B33333333333",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C008000000000000",
+     "cornerBits": "4023000000000000"
+    },
+    {
+     "move": {
+      "slot": 2,
+      "row": 1,
+      "col": 0,
+      "cardId": 127
+     },
+     "finalScore": -4.425,
+     "finalBits": "C011B33333333333",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C008000000000000",
+     "cornerBits": "4023000000000000"
+    },
+    {
+     "move": {
+      "slot": 2,
+      "row": 1,
+      "col": 1,
+      "cardId": 127
+     },
+     "finalScore": -4.425,
+     "finalBits": "C011B33333333333",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C008000000000000",
+     "cornerBits": "4023000000000000"
+    },
+    {
+     "move": {
+      "slot": 1,
+      "row": 2,
+      "col": 2,
+      "cardId": 353
+     },
+     "finalScore": -4.425000000000001,
+     "finalBits": "C011B33333333334",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C005C00000000000",
+     "cornerBits": "4026C00000000001"
+    },
+    {
+     "move": {
+      "slot": 0,
+      "row": 1,
+      "col": 0,
+      "cardId": 387
+     },
+     "finalScore": -5.137499999999999,
+     "finalBits": "C0148CCCCCCCCCCC",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C008000000000000",
+     "cornerBits": "402C800000000000"
+    },
+    {
+     "move": {
+      "slot": 1,
+      "row": 1,
+      "col": 0,
+      "cardId": 353
+     },
+     "finalScore": -5.1875,
+     "finalBits": "C014C00000000000",
+     "safetyRatio": 0,
+     "safetyBits": "0000000000000000",
+     "robustBits": "C014000000000000",
+     "cornerBits": "3FF4000000000000"
+    }
+   ]
+  },
+  "timings": {
+   "buildMs": 31.7457,
+   "searchMs": 22.509,
+   "robustMs": 42.1071,
+   "totalMs": 96.4395
+  },
+  "worker": 0
+ }
+}

@@ -1,0 +1,72 @@
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 16 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 16 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 16 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 127 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 127 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 127 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=1
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=8
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=opening distinct requests=27 max_depth=10 max_time=10 determinism Flask
+# determinism check over 9 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=opening distinct requests=27 max_depth=10 max_time=10 determinism Flask
+# determinism check over 9 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=opening distinct requests=27 max_depth=10 max_time=10 determinism Flask
+# determinism check over 9 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=mid distinct requests=111 max_depth=10 max_time=10 determinism Flask
+# determinism check over 50 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=mid distinct requests=111 max_depth=10 max_time=10 determinism Flask
+# determinism check over 50 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=mid distinct requests=111 max_depth=10 max_time=10 determinism Flask
+# determinism check over 50 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=robust distinct requests=219 max_depth=10 max_time=10 determinism Flask
+# determinism check over 93 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=robust distinct requests=219 max_depth=10 max_time=10 determinism Flask
+# determinism check over 93 distinct requests: IDENTICAL at every concurrency
+# load test target=flask url=http://127.0.0.1:5392 category=robust distinct requests=219 max_depth=10 max_time=10 determinism Flask
+# determinism check over 93 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=opening distinct requests=27 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=mid distinct requests=111 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
+# load test target=engine url=http://127.0.0.1:5391 category=robust distinct requests=219 max_depth=10 max_time=10 determinism workers=20
+# determinism check over 346 distinct requests: IDENTICAL at every concurrency
