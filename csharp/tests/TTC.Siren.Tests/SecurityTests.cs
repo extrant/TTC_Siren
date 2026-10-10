@@ -326,7 +326,9 @@ public sealed class SecurityTests : IDisposable
         Assert.DoesNotContain(secret[4..], everything);
         Assert.DoesNotContain(fakeKey, everything);
         Assert.DoesNotContain("Bearer", everything);
-        Assert.Contains("rejected unknown API key ttc_THIS", everything); // a short prefix identifies the attempt
+        Assert.DoesNotContain("ttc_THIS", everything);                     // not even a prefix of a presented key is logged
+        Assert.DoesNotContain(secret[..8], everything);
+        Assert.Contains("rejected unknown API key", everything);
         Assert.Contains("rejected revoked API key k-", everything);       // a revoked key by its public id
         foreach (var file in Directory.EnumerateFiles(_dir, "*", SearchOption.AllDirectories).Where(f => !f.EndsWith("keys.json", StringComparison.Ordinal)))
             Assert.DoesNotContain(secret, File.ReadAllText(file));

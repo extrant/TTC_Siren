@@ -35,9 +35,6 @@ public sealed class ApiKeyStore
 
     public static string HashOf(string secret) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret))).ToLowerInvariant();
 
-    /// <summary>A short, non-secret label for log lines: the first characters of the presented key (never the whole key).</summary>
-    public static string Prefix8(string secret) => secret.Length <= 8 ? new string('*', secret.Length) : secret[..8] + "…";
-
     private void Reload(bool force)
     {
         lock (_lock)

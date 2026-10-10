@@ -44,7 +44,7 @@ public sealed class KeyAuthenticator : IApiKeyAuthenticator
         var record = _store.Find(secret);
         if (record is null)
         {
-            _log?.Invoke($"rejected unknown API key {ApiKeyStore.Prefix8(secret)} from {request.HttpContext.Connection.RemoteIpAddress}");
+            _log?.Invoke($"rejected unknown API key (no part of it is logged) from {request.HttpContext.Connection.RemoteIpAddress}");
             return AuthResult.Denied(401, "invalid API key");
         }
         if (!record.Enabled)
