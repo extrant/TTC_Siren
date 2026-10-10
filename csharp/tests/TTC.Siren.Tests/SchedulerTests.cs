@@ -40,6 +40,12 @@ public sealed class SchedulerTests
         Assert.Equal(count, pool.Waiting);
     }
 
+    private static async Task WaitUntilQueuedAtLeast(WorkerPool pool, int count)
+    {
+        for (int i = 0; i < 1000 && pool.Waiting < count; i++) await Task.Delay(5);
+        Assert.True(pool.Waiting >= count, $"only {pool.Waiting} requests are waiting");
+    }
+
     [Fact]
     public async Task Requests_of_one_class_are_served_first_come_first_served()
     {
@@ -124,7 +130,7 @@ public sealed class SchedulerTests
             }
             await Task.WhenAll(tasks);
         });
-        await Task.Delay(30);
+        await WaitUntilQueuedAtLeast(pool, 3); // the opening and two cheap requests are waiting: the next grant is a real choice
         pool.Release(running);
         var result = await opening;
         double waited = result.WaitedMs;

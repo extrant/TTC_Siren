@@ -130,10 +130,11 @@ internal sealed class JsonObjectBuilder
 
 internal static class SimHttp
 {
-    public static async Task<(int Status, string Text)> PostAsync(HttpClient client, string url, string body, string? key = null)
+    public static async Task<(int Status, string Text)> PostAsync(HttpClient client, string url, string body, string? key = null, ulong? seed = null)
     {
         var message = new HttpRequestMessage(HttpMethod.Post, url + "/ai_move") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         if (key is not null) message.Headers.Add("X-Test-Key", key);
+        if (seed is not null) message.Headers.Add("X-Ttc-Test-Seed", seed.Value.ToString()); // needs ServerOptions.TestSeedHeader
         using var response = await client.SendAsync(message);
         return ((int)response.StatusCode, await response.Content.ReadAsStringAsync());
     }

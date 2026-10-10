@@ -56,7 +56,7 @@ public sealed class GameLogTests : IDisposable
     {
         var options = new ServerOptions
         {
-            Host = "127.0.0.1", Port = 0, Workers = 2, TtEntries = AiMoveParityTests.TtEntries,
+            Host = "127.0.0.1", Port = 0, Workers = 2, TtEntries = AiMoveParityTests.TtEntries, TestSeedHeader = true, // fixed seeds: the games are reproducible
             GameLog = new GameLogOptions { Directory = _dir, RetentionDays = retentionDays, GapMinutes = 15 },
             Security = new TTC.Siren.Server.Security.SecurityOptions { RequireKey = false, DefaultBurst = 1000, DefaultRatePerMinute = 100000, DefaultMaxInFlight = 64 },
         };
@@ -87,12 +87,13 @@ public sealed class GameLogTests : IDisposable
     {
         var rng = new Random(900 + index);
         var sim = new GameSimulator(db, opponentAi, rng, RuleSets[index % RuleSets.Length], user: index % 2, first: (index / 2) % 2);
+        int turn = 0;
         while (!sim.Finished)
         {
             if (sim.UserToMove)
             {
                 string extra = gameId is null ? "" : $",\"gameId\":\"{gameId}\"";
-                var (status, text) = await SimHttp.PostAsync(client, url, sim.UserRequest(6, extra));
+                var (status, text) = await SimHttp.PostAsync(client, url, sim.UserRequest(6, extra), seed: (ulong)(7000 + index * 20 + turn++));
                 Assert.Equal(200, status);
                 using var answer = JsonDocument.Parse(text);
                 sim.PlayUser(answer.RootElement);
