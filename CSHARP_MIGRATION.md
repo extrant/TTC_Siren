@@ -5,7 +5,7 @@
 > 任何 Phase 完成后必须更新本文件。
 >
 > **新会话快速上手：先读 `CLAUDE.md`，再读本文件 §12「会话交接」（当前状态、如何构建/测试、用户已做的决定、未解决问题、下一步），然后按需读 §0 与 §7。**
-> 当前一句话状态：Phase 1–5 完成（Phase 5 于 2026-10-08 完成，验收见 §7 Phase 5；M4-1/M4-2 已先行解决）；Phase 6 已完成，等待独立审查（2026-10-10；`.claude/phase6_goal.md`：A 提交并推送 Phase 5 → B D-004 双边修复 → C 性能优化，三步均已完成）；工作在分支 `csharp-solver-migration`（Phase 5 已提交并推送到 `b6e4ea4`；B（`a0eb193`）、C（`48e38cd`…`290b15e`）的提交只在本地，未推送；**没有**对 `main` 的 PR——PR #1 已按用户要求关闭）。
+> 当前一句话状态：Phase 1–5 完成（Phase 5 于 2026-10-08 完成，验收见 §7 Phase 5；M4-1/M4-2 已先行解决）；Phase 6 已完成，独立审查门禁 **`PASS_WITH_NONBLOCKING_FINDINGS`**（2026-10-10，`docs/reviews/OPUS_PHASE6_REVIEW.md`；0 CRITICAL / 0 HIGH，L6-1…L6-5 不阻塞；Phase 7 需用户授权）（2026-10-10；`.claude/phase6_goal.md`：A 提交并推送 Phase 5 → B D-004 双边修复 → C 性能优化，三步均已完成）；工作在分支 `csharp-solver-migration`（Phase 5 已提交并推送到 `b6e4ea4`；B（`a0eb193`）、C（`48e38cd`…`290b15e`）的提交只在本地，未推送；**没有**对 `main` 的 PR——PR #1 已按用户要求关闭）。
 
 ---
 
@@ -18,8 +18,8 @@
 | 3 | Evaluator / MoveOrdering / History / Minimax / AlphaBeta / ID（ReferenceCompat，节点级 parity） | **DONE**（2026-10-07，验收见 §7 Phase 3） |
 | 4 | Zobrist / 带 bound 的 TranspositionTable / Fast 搜索模式 | **DONE**（2026-10-07，Q-5 = 选项 (b)，验收见 §7 Phase 4） |
 | 5 | 精确残局 + 信息集 robust 残局 + Python-vs-C# 全量 benchmark | **DONE**（2026-10-08，验收见 §7 Phase 5；先行解决了 M4-1/M4-2；benchmark 报告 `docs/reports/PHASE5_BENCHMARK.md`） |
-| 6 | Profiler 驱动优化（单线程）→ 可选 root parallelism | **DONE，等待独立审查**（2026-10-10；root parallelism 未授权、未做）— 以下为授权前的审查记录： Phase 5 benchmark 独立审查结论 **`BENCHMARK_VALID_WITH_CAVEATS`**（`docs/reviews/OPUS_PHASE5_BENCHMARK_REVIEW.md`：没有正确性回归；49.7× 是冷 JIT 数字，热态约 110×；精确求解的 263× 不可复现，约 165×）。建议 Phase 6 之前先执行 `.claude/sonnet_review_fix_goal.md`（只修 benchmark 工具与报告），否则 §6 的 Baseline→Compare 不可靠。**整改复审（2026-10-08，审查文档 §12）**：B-1 到 B-5 全部 RESOLVED，结论仍为 `BENCHMARK_VALID_WITH_CAVEATS`，更正后的数字在固定到 P 核的复测中得到确认；新发现 **A-7**（混合架构 CPU 的 P/E 核调度不受控，未固定亲和性时比值可偏高约 1.6–1.7×，C# 自身在 E 核上慢约 1.45×），Phase 6 之前需先执行新的 `.claude/sonnet_review_fix_goal.md`（只含 A-7）。**A-7 复审（2026-10-08，审查文档 §13）**：A-7 RESOLVED（`tools/bench/pin.py` + `run_interleaved.py --affinity`，两边固定在同一 P 核集，独立复测一致），B-1 到 B-5 无回归，结论 `BENCHMARK_VALID_WITH_CAVEATS`；可信范围（对 CPython 3.11.4、两边都在 P 核）：Python 语义搜索 warm 113–118×、cold ≈52–91×（双峰）；robust 流水线 warm 169–180×、cold 109–123×；精确求解 159–176×。**从 benchmark 角度可以开始 Phase 6**（仍需用户明确授权；Phase 6 的所有 Baseline→Compare 必须固定亲和性并记录掩码）。**用户已授权 Phase 6（2026-10-09）**：任务 `.claude/phase6_goal.md`（A：提交并推送 Phase 5 —— 已完成，`b6e4ea4`；B：Q-2/D-004 双边修复 —— 已完成，`a0eb193`，本地；C：Phase 6 的性能工作 —— 已完成，本地）。**Phase 6 状态：DONE，等待独立审查**（见 §7 Phase 6 交付记录与 `docs/reports/PHASE6_OPTIMIZATION.md`）；B、C 的提交未推送，Phase 7 未开始 |
-| 7 | 集成策略：Python 服务调用 C# 引擎（桥接 + 回退） | NOT STARTED |
+| 6 | Profiler 驱动优化（单线程）→ 可选 root parallelism | **DONE**；独立审查门禁 **`PASS_WITH_NONBLOCKING_FINDINGS`**（2026-10-10，`docs/reviews/OPUS_PHASE6_REVIEW.md`）（2026-10-10；root parallelism 未授权、未做）— 以下为授权前的审查记录： Phase 5 benchmark 独立审查结论 **`BENCHMARK_VALID_WITH_CAVEATS`**（`docs/reviews/OPUS_PHASE5_BENCHMARK_REVIEW.md`：没有正确性回归；49.7× 是冷 JIT 数字，热态约 110×；精确求解的 263× 不可复现，约 165×）。建议 Phase 6 之前先执行 `.claude/sonnet_review_fix_goal.md`（只修 benchmark 工具与报告），否则 §6 的 Baseline→Compare 不可靠。**整改复审（2026-10-08，审查文档 §12）**：B-1 到 B-5 全部 RESOLVED，结论仍为 `BENCHMARK_VALID_WITH_CAVEATS`，更正后的数字在固定到 P 核的复测中得到确认；新发现 **A-7**（混合架构 CPU 的 P/E 核调度不受控，未固定亲和性时比值可偏高约 1.6–1.7×，C# 自身在 E 核上慢约 1.45×），Phase 6 之前需先执行新的 `.claude/sonnet_review_fix_goal.md`（只含 A-7）。**A-7 复审（2026-10-08，审查文档 §13）**：A-7 RESOLVED（`tools/bench/pin.py` + `run_interleaved.py --affinity`，两边固定在同一 P 核集，独立复测一致），B-1 到 B-5 无回归，结论 `BENCHMARK_VALID_WITH_CAVEATS`；可信范围（对 CPython 3.11.4、两边都在 P 核）：Python 语义搜索 warm 113–118×、cold ≈52–91×（双峰）；robust 流水线 warm 169–180×、cold 109–123×；精确求解 159–176×。**从 benchmark 角度可以开始 Phase 6**（仍需用户明确授权；Phase 6 的所有 Baseline→Compare 必须固定亲和性并记录掩码）。**用户已授权 Phase 6（2026-10-09）**：任务 `.claude/phase6_goal.md`（A：提交并推送 Phase 5 —— 已完成，`b6e4ea4`；B：Q-2/D-004 双边修复 —— 已完成，`a0eb193`，本地；C：Phase 6 的性能工作 —— 已完成，本地）。**Phase 6 状态：DONE，等待独立审查**（见 §7 Phase 6 交付记录与 `docs/reports/PHASE6_OPTIMIZATION.md`）；B、C 的提交未推送，Phase 7 未开始 |
+| 7 | 集成策略：Python 服务调用 C# 引擎（桥接 + 回退） | **用户已授权（2026-10-10）**：任务 `.claude/phase7_goal.md`（A：Phase 6 收尾并推送现有本地提交 → B：Phase 7 集成，提交只在本地）；用户决定：C# 引擎是只监听 127.0.0.1 的独立 HTTP 服务（ASP.NET Core，依赖服务器上安装的 .NET 10 运行时）、请求级并行（引擎内工作线程池，不做 root parallelism）、默认开启并在出错/超时时自动回退 Python、搜索参数沿用 Python（`max_depth`=10、`max_time`=10 s）、部署目标 Windows Server（E5-2698B v3，16 GB）；进行中 → 完成后等待独立审查 |
 | 8 | 全量服务移植（请求解析、未知牌采样、MC、分析文案、app.py 子系统、HTTP） | NOT STARTED |
 | 9 | 可选：CP-SAT 隐藏牌组合 / deck optimization / scenario generation | NOT STARTED |
 
@@ -753,7 +753,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 
 #### Phase 6 交付记录（2026-10-10，`.claude/phase6_goal.md` 步骤 C；详细数据 `docs/reports/PHASE6_OPTIMIZATION.md`）
 
-**状态：DONE，等待独立审查**（审查门禁由审查者设置，整改者不设）。单线程；没有 `unsafe`、SIMD、多线程；没有 root parallelism；没有改变任何规则/搜索语义。所有计时固定在 P 核 `0xFFF`（`run_cs_pinned.py` / `run_interleaved.py --affinity auto`），B、C 的提交只在本地，未推送。
+**状态：DONE，等待独立审查**（审查门禁由审查者设置，整改者不设）。**审查门禁（2026-10-10）：`PASS_WITH_NONBLOCKING_FINDINGS`**，见 `docs/reviews/OPUS_PHASE6_REVIEW.md`。单线程；没有 `unsafe`、SIMD、多线程；没有 root parallelism；没有改变任何规则/搜索语义。所有计时固定在 P 核 `0xFFF`（`run_cs_pinned.py` / `run_interleaved.py --affinity auto`），B、C 的提交只在本地，未推送。
 - **工具**：`tools/bench/run_cs_pinned.py`（C# 单独、固定亲和性、多次进程运行 min/median/max、检查确定性输出的 SIG 签名在每次运行与基线之间完全相同、`--exe` 做同窗口 A/B）、`tools/bench/profile_summary.py`（`dotnet-trace` 固定核采集并汇总 Speedscope）、`Bench` 的 `SIG` 行、make/undo 的 `RESULT` 行与 `loop fast|compat|exact`。
 - **profile（优化前）**：Fast——`MakeMove` 44%（`RecalculateTypeModifiers` 29%）、`EvaluateState` 31%；compat——`OrderMoves` 57%；exact——`RecalculateTypeModifiers` 59%（复现评审 §8）。
 - **保留的改动（各为一个本地提交）**：C1 `3a77dbe` 一次遍历实例表重算同类修正（同类强化 exact −33%、Fast −10%、含同类规则的 make/undo −43..−48%）；C3 `6b61630`（回退后以 `290b15e` 重新应用）查表式 `PlacementEdgeScore`（compat −20%、Fast −19%，位级相同，因为所有项都是 0.5 的倍数）；C4a `2c226bb` `EvaluateMove` 走邻接表（compat −6%）；C7 `782a3b5` 每线程复用 exact memo（robust 流水线 −21%，评审 L5-2）。
@@ -790,7 +790,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | A-5 | 自写稳定排序 | `Array.Sort` 不稳定 | 已定 |
 | A-6 | 目标框架 net10.0 | 本机已安装 SDK 10.0.401（LTS） | 已定 |
 | A-7 | 随机采样类逻辑不追求位级 parity | Python RNG 与 `random.sample` 的实现细节不应复刻 | 已定 |
-| A-8 | 集成先用子进程/本地 HTTP 桥接，再做全量替换 | 降低风险，可回退 | 提议（Phase 7 确认） |
+| A-8 | 集成先用子进程/本地 HTTP 桥接，再做全量替换 | 降低风险，可回退 | **已定（用户，2026-10-10）：本机 HTTP 服务**（只监听 127.0.0.1，所有 Python 进程共用一个引擎进程，引擎内工作线程池；也是 Phase 8 的基础）；默认开启，出错/超时/协议或卡库不匹配时自动回退 Python |
 | A-9 | D-002 在 Python 和 C# 两边同时修复（按卡身份恢复 `type_modifier`） | 用户批准（Q-1）；否则同类规则下的搜索结果依赖访问顺序，Fast 模式的 parity 无法定义 | 已定（FIXED-BOTH） |
 | A-10 | `Move` 的身份是卡实例 `(Inst, Cell)`，不是手牌槽位 | D-001 会在每次 make/undo 后重排手牌；Phase 3 真实出现过由此导致的 parity 错误；Phase 4 的 TT 走法/history/killer 会跨节点保存走法 | 已定（审查 H-3 整改） |
 | A-11 | ReferenceCompat TT：128 位摘要代替字符串 key，按需翻倍扩容 + 硬上限（默认 2^25 槽），代际号清空 | Python 的 dict 无界且 key 是字符串；等价类已用 SHA-1 双射验证；扩容不改变结果 | 已定（审查 H-2 整改） |
@@ -817,6 +817,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | Q-4 | D-012 卡库 474/475 全 0 空行是否应从候选池中排除？ | 保持 | Phase 5 前（**Phase 5 按默认保持；golden 的合法候选 id 列表含 474/475，与 Python 一致**；若用户之后要排除，Python 与 C# 要同时改） |
 | Q-5 | ~~Fast 模式中，同分并列时是否允许选择与 Python 不同的走法？~~ **已决定：选项 (b)（用户，2026-10-07）——只允许在分数位级完全相等的走法之间不同，并逐条验证、报告；已在 Phase 4 完成，见 §7。** | — | 已关闭 |
 | Q-6 | 是否需要 PyPy 的 baseline（生产构建使用 PyPy，本机未安装）？ | 只用 CPython baseline | Phase 5 前（**Phase 5 按默认只用 CPython 3.11.4**；`docs/reports/PHASE5_BENCHMARK.md` 注明了这一点） |
+| Q-7 | ~~Phase 6 之后做什么、怎么上线？~~ **已决定（用户，2026-10-10）**：授权 Phase 7 + 请求级并行（`.claude/phase7_goal.md`）；**不做** root parallelism（只降低单个请求的延迟，对多用户吞吐无益）；把现有本地提交（`a0eb193..`，含 Phase 6 收尾文档）**原样快进推送**到 `origin/csharp-solver-migration`（不压缩、不动 main、不开 PR；Phase 7 的提交只在本地）；引擎为本机 HTTP 服务、依赖系统 .NET 10 运行时（ASP.NET Core 共享框架）、默认开启 + 自动回退、搜索参数沿用 Python（10 层 / 10 s）、部署在 Windows Server | — | 已关闭 |
 
 ---
 
@@ -881,7 +882,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 
 ## 11. 下一步行动
 
-0. **Phase 1–6 完成（Phase 6 等待独立审查）。** 下一步由用户决定：(a) 让审查者复核 Phase 5、D-004 修复（FIXED-BOTH）与 Phase 6（重点：各保留提交的位级不变量；cold 比较必须用交替构建的 `ab_interleaved.py`，块顺序会产生假回归，`PHASE6_OPTIMIZATION.md` §5）；(b) 是否推送本地提交 `a0eb193`（D-004）与 `48e38cd`…`290b15e`（Phase 6）到 `origin/csharp-solver-migration`（CLAUDE.md §8：未经授权不推送）；(c) 是否授权 root parallelism（Phase 6 末尾，需单独批准）；(d) Phase 7（D-015 已定：标准搜索用 Fast，robust 前恢复规范手牌顺序）。**Phase 7 未开始，需要用户明确授权。**
+0. **Phase 1–6 完成（Phase 6 审查门禁 `PASS_WITH_NONBLOCKING_FINDINGS`，2026-10-10，`docs/reviews/OPUS_PHASE6_REVIEW.md` §7/§9）。** 下一步由用户决定：(a) 让审查者复核 Phase 5、D-004 修复（FIXED-BOTH）与 Phase 6（重点：各保留提交的位级不变量；cold 比较必须用交替构建的 `ab_interleaved.py`，块顺序会产生假回归，`PHASE6_OPTIMIZATION.md` §5）；(b) 是否推送本地提交 `a0eb193`（D-004）与 `48e38cd`…`290b15e`（Phase 6）到 `origin/csharp-solver-migration`（CLAUDE.md §8：未经授权不推送）；(c) 是否授权 root parallelism（Phase 6 末尾，需单独批准）；(d) Phase 7（D-015 已定：标准搜索用 Fast，robust 前恢复规范手牌顺序）。**Phase 7 未开始，需要用户明确授权。**
 1. 工作区状态（2026-10-10）：分支 `csharp-solver-migration`，Phase 5 的 5 个提交已推送（`710a70e..b6e4ea4`）；本地未推送：`a0eb193`（D-004 双边修复 + D-019）、`48e38cd`（Phase 6 工具）、`3a77dbe`（C1）、`6b61630`（C3）、`2c226bb`（C4a）、`782a3b5`（C7）、`c6d3115`（文档）、`17c07c7`（回退 C3）、`290b15e`（重新应用 C3）及随后的文档提交。`csharp/.vs/`、`bin/`、`obj/`、golden 数据不入库。PR #1 已关闭，`main` 仍是 `eb60a02`。
 2. Phase 6 开始前不需要用户回答问题。已有默认的待决问题：Q-2（D-004，Phase 7 前）、Q-3（连携一层，Phase 8 前）、Q-6（PyPy baseline，按默认 CPython）。
 3. 仍未处理的审查遗留项：M4-3（搜索后的手牌顺序/显示边与 Python 对比、golden 偏向后期局面——**D-015 说明手牌顺序对 robust 选择有影响，Phase 7 前必须处理**）、L4-1 到 L4-7、O4-1 到 O4-3、Phase 3 的 L-1 到 L-12 与 O-1 到 O-5（见 §12.7）。
@@ -925,7 +926,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | 推送分支 | DONE | 用户于 2026-10-08 明确要求：`d0ef721..710a70e` 推送到 `origin/csharp-solver-migration`（`main` 未动） |
 | M4-1、M4-2 | DONE（2026-10-08） | 用户要求在生成任何 Phase 5 golden 之前先解决，不扩大为 Phase 4 清理 |
 | **Phase 5** 精确残局 / robust / 场景 / benchmark | **DONE**（2026-10-08，`/goal @.claude/phase_goal.md`） | 验收见 §7 Phase 5；Q-4、Q-6 保持默认；改动未提交 |
-| **Phase 6** | **DONE，等待独立审查**（2026-10-10） | 用户 2026-10-09 授权 `.claude/phase6_goal.md`：A 推送 Phase 5（`b6e4ea4`）、B Q-2/D-004 双边修复（`a0eb193`，本地）、C 性能优化（4 个保留提交，本地）；详见 §7 Phase 6 交付记录 |
+| **Phase 6** | **DONE**（2026-10-10）；审查门禁 **`PASS_WITH_NONBLOCKING_FINDINGS`**（`docs/reviews/OPUS_PHASE6_REVIEW.md`） | 用户 2026-10-09 授权 `.claude/phase6_goal.md`：A 推送 Phase 5（`b6e4ea4`）、B Q-2/D-004 双边修复（`a0eb193`，本地）、C 性能优化（4 个保留提交，本地）；详见 §7 Phase 6 交付记录 |
 
 ### 12.3 代码地图（`csharp/`，.NET `net10.0`，`Nullable`、`TreatWarningsAsErrors`）
 
