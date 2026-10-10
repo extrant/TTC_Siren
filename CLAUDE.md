@@ -85,6 +85,7 @@ csharp/                      C# 解决方案根目录
   src/TTC.Siren.Core/        卡牌数据、规则、GameState、MakeMove/UndoMove
   src/TTC.Siren.Search/      评估、排序、Minimax/AlphaBeta/ID、TT、残局
   src/TTC.Siren.Bench/       benchmark 控制台
+  src/TTC.Siren.Engine/      本机 HTTP 引擎服务（Phase 7；ASP.NET Core，只监听 127.0.0.1；Python ai_server 的 minimax 路径调用它，出错时回退到 Python）
   tests/TTC.Siren.Tests/     xUnit 单元测试 + parity 测试
 tools/parity/                Python 侧 golden 数据生成脚本（只读调用 reference 实现）
 ```
