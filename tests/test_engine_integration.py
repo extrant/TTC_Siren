@@ -122,7 +122,7 @@ def test_the_engine_answers_through_flask(client, corpus, tags):
     assert body['engine'] == 'csharp', body
     assert body['performance_stats']['engine'] == 'csharp'
     assert body['performance_stats']['nodes_searched'] > 0
-    assert 'fallback_reason' not in body
+    assert 'engine_error' not in body
     row, col = body['pos']
     assert cell_is_empty(request, (row, col))
     if 'progress' in tags:
@@ -141,17 +141,21 @@ def test_the_engine_answer_is_the_same_whichever_flask_thread_asks(client, corpu
     assert first['engine'] == second['engine'] == 'csharp'
 
 
-def test_a_stopped_engine_falls_back_to_the_python_path(corpus, monkeypatch):
+def test_a_stopped_engine_is_a_503_and_the_python_solver_does_not_run(corpus, monkeypatch):
+    """A-20 (replaces the test of the automatic fallback): no engine, no answer, and above all no Python search."""
     csharp_engine.reset()
     monkeypatch.setenv('TTC_CS_ENGINE', 'on')
     monkeypatch.setenv('TTC_CS_ENGINE_URL', 'http://127.0.0.1:%d' % free_port())  # nothing listens there
     monkeypatch.setenv('TTC_CS_ENGINE_CONNECT_TIMEOUT', '0.3')
     monkeypatch.setattr(ai_server, 'console_ui', NullUi())
+    calls = []
+    for name in ('find_best_move_parallel', 'select_endgame_robust_move', '_solve_minimax_python'):
+        monkeypatch.setattr(ai_server, name, lambda *a, _n=name, **k: calls.append(_n))
     entry = pick(corpus, 'k:3', avoid=('full_board',))
     random.seed(entry['seed'])
     response = ai_server.app.test_client().post('/ai_move', json=request_of(entry, depth=2))
     body = response.get_json()
-    assert response.status_code == 200
-    assert body['engine'] == 'python' and body['fallback_reason'] in ('connection_failed', 'timeout')
-    assert 'card' in body  # the Python path produced a normal answer
+    assert response.status_code == 503
+    assert body['engine'] == 'csharp' and body['engine_error'] == 'connection_failed'
+    assert 'card' not in body and calls == []
     csharp_engine.reset()

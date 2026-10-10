@@ -183,12 +183,12 @@ def summarise(target, results, wall, concurrency):
     else:
         csharp = [r for r in ok if r['body'].get('engine') == 'csharp']
         row['engine_answers'] = len(csharp)
-        row['fallbacks'] = sum(1 for r in ok if r['body'].get('engine') == 'python')
-        reasons = {}
-        for r in ok:
-            if r['body'].get('engine') == 'python':
-                reasons[r['body'].get('fallback_reason')] = reasons.get(r['body'].get('fallback_reason'), 0) + 1
-        row['fallback_reasons'] = reasons
+        # A-20: there is no fallback any more; a failed engine call is an HTTP error with an engine_error code
+        errors = {}
+        for r in results:
+            if isinstance(r['body'], dict) and r['body'].get('engine_error'):
+                errors[r['body']['engine_error']] = errors.get(r['body']['engine_error'], 0) + 1
+        row['engine_error_counts'] = errors
         overhead = []
         for r in csharp:
             engine_ms = (r['body'].get('engine_info') or {}).get('timings', {}) or {}

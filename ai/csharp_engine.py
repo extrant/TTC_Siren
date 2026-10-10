@@ -5,21 +5,30 @@ Client of the C# engine (Phase 7): a local HTTP service (csharp/src/TTC.Siren.En
 
 Standard library only (``http.client``, ``json``, ``hashlib``): the production interpreter may be PyPy.
 
+Since the Phase 7 hardening (decision A-20) the engine is the ONLY minimax solver while it is switched on: every problem is raised
+as :class:`EngineError` and ``ai_server.ai_move`` answers it with an HTTP error. There is no automatic fallback to the Python solver.
+
 Behaviour
   * Configuration by environment variables, read at call time:
-      TTC_CS_ENGINE                   ``on`` (default) | ``off``
+      TTC_CS_ENGINE                   ``on`` (default) | ``off``. ``off`` is a MANUAL switch (set by the operator, never automatically):
+                                      the server then runs the unchanged Python solver and never contacts the engine.
       TTC_CS_ENGINE_URL               default ``http://127.0.0.1:5300``
       TTC_CS_ENGINE_CONNECT_TIMEOUT   seconds, default 0.5
-      TTC_CS_ENGINE_READ_MARGIN       seconds added to ``max_time`` for the read timeout, default 5
-      TTC_CS_ENGINE_BACKOFF           seconds the engine is skipped after a connection-level failure, default 30
-  * The first use (and the first use after a failure) checks ``GET /v1/health``: the protocol version must match and the
-    engine's card-database SHA-256 must equal the hash of the CSV this process loads. Otherwise: fall back.
-  * Every problem raises :class:`EngineFallback` with a short ``reason``; the caller then runs the unchanged Python solver.
-  * One keep-alive connection per thread. Connection-level failures (refused, timeout, reset) open a circuit breaker for
-    ``TTC_CS_ENGINE_BACKOFF`` seconds so that every request does not pay the timeout again.
+      TTC_CS_ENGINE_READ_MARGIN       seconds added to ``max_time`` + the engine's queue wait for the read timeout, default 5
+      TTC_CS_ENGINE_POOL_SIZE         idle keep-alive connections kept in the process-wide pool, default 32
+  * The first use (and the first use after a connection-level failure) checks ``GET /v1/health``: the protocol version must match,
+    the engine's card-database SHA-256 must equal the hash of the CSV this process loads, and the health reports the engine's
+    ``queueWaitMs``. Otherwise :class:`EngineError` (``protocol_mismatch`` / ``card_db_mismatch`` / ``health_failed``). Nothing is
+    cached about a failed verification, so a corrected engine is accepted by the next request.
+  * Read timeout of a solve = ``max_time`` + the engine's queue wait + a margin: a request that waits in the engine's queue is answered by
+    the engine (a result or ``busy``) before the client gives up. There is no circuit breaker.
+  * Connections come from one process-wide, thread-safe LIFO pool, so they are reused however many short-lived threads (Flask's
+    ``threaded=True``) ask. A connection that fails is closed and never returned; an idle one that the server has closed is replaced
+    once. Connections are closed explicitly (never left to the garbage collector: PyPy).
 
 Nothing here touches the Python search state (``SEARCH_STATS``, ``TRANSPOSITION_TABLE``) or the random generator.
 """
+import atexit
 import hashlib
 import http.client
 import json
@@ -29,22 +38,34 @@ import os
 import socket
 import sys
 import threading
-import time
 import urllib.parse
 
 PROTOCOL = 1
 DEFAULT_URL = 'http://127.0.0.1:5300'
+DEFAULT_POOL_SIZE = 32
 
 log = logging.getLogger('ttc.engine')
 
+# What ``ai_server.ai_move`` answers for each reason: a problem with the request itself is 400, a defect of this server's own client
+# code 500, everything the engine (or the way to it) does wrong 503.
+_HTTP_STATUS = {'unsupported_parameter': 400, 'client_error': 500}
 
-class EngineFallback(Exception):
-    """The engine cannot answer this request; run the Python solver. ``reason`` is a short machine-readable code."""
+
+class EngineError(Exception):
+    """The engine cannot answer this request. ``reason`` is a short machine-readable code, ``detail`` a human-readable addition."""
 
     def __init__(self, reason, detail=''):
         super().__init__('%s%s' % (reason, (': ' + detail) if detail else ''))
         self.reason = reason
         self.detail = detail
+
+    @property
+    def http_status(self):
+        return _HTTP_STATUS.get(self.reason, 503)
+
+
+class _StaleConnection(Exception):
+    """A reused idle connection had been closed by the server before the request was sent (internal; never leaves this module)."""
 
 
 # --------------------------------------------------------------------------- configuration
@@ -56,13 +77,24 @@ def _env_float(name, default):
         return float(default)
 
 
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def is_enabled():
-    """``TTC_CS_ENGINE`` is ``on`` by default; ``off`` / ``0`` / ``false`` / ``no`` switch the engine off completely."""
+    """``TTC_CS_ENGINE`` is ``on`` by default; ``off`` / ``0`` / ``false`` / ``no`` switch the engine off completely (manual switch)."""
     return os.environ.get('TTC_CS_ENGINE', 'on').strip().lower() not in ('off', '0', 'false', 'no')
 
 
 def engine_url():
     return os.environ.get('TTC_CS_ENGINE_URL', DEFAULT_URL).strip() or DEFAULT_URL
+
+
+def pool_limit():
+    return max(0, _env_int('TTC_CS_ENGINE_POOL_SIZE', DEFAULT_POOL_SIZE))
 
 
 # --------------------------------------------------------------------------- card database hash
@@ -91,21 +123,21 @@ def card_db_sha256():
     return _db_sha
 
 
-# --------------------------------------------------------------------------- circuit breaker and connections
+# --------------------------------------------------------------------------- verification state and the connection pool
 
 _state_lock = threading.Lock()
-_disabled_until = 0.0
 _verified_url = None
-_local = threading.local()
+_queue_wait_s = 0.0
+_pool = []  # idle connections, newest last: a LIFO of (url, HTTPConnection)
 
 
 def reset():
-    """Forget the breaker, the verification and this thread's connection (tests, and after reconfiguration)."""
-    global _disabled_until, _verified_url, _db_sha
+    """Forget the verification and close every pooled connection (tests, and after reconfiguration)."""
+    global _verified_url, _queue_wait_s, _db_sha
     with _state_lock:
-        _disabled_until = 0.0
         _verified_url = None
-    _drop_connection()
+        _queue_wait_s = 0.0
+    close_pool()
     _db_sha = None
 
 
@@ -116,138 +148,192 @@ def set_card_db_path(path):
     _db_sha = None
 
 
-def breaker_open():
+def _invalidate_verification():
+    global _verified_url
     with _state_lock:
-        return time.monotonic() < _disabled_until
-
-
-def _open_breaker():
-    global _disabled_until, _verified_url
-    backoff = _env_float('TTC_CS_ENGINE_BACKOFF', 30.0)
-    with _state_lock:
-        _disabled_until = time.monotonic() + max(0.0, backoff)
         _verified_url = None
-    _drop_connection()
 
 
-def _drop_connection():
-    conn = getattr(_local, 'conn', None)
-    _local.conn = None
-    _local.conn_url = None
-    if conn is not None:
-        try:
-            conn.close()
-        except Exception:  # noqa: BLE001
-            pass
+def _close(conn):
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
-def _connection(url, read_timeout):
-    """This thread's keep-alive connection to ``url`` (created on first use)."""
+def close_pool():
+    """Close every idle pooled connection."""
+    with _state_lock:
+        idle = list(_pool)
+        del _pool[:]
+    for _, conn in idle:
+        _close(conn)
+
+
+atexit.register(close_pool)
+
+
+def pool_idle():
+    """Number of idle connections in the pool (tests, monitoring)."""
+    with _state_lock:
+        return len(_pool)
+
+
+def _checkout(url, fresh):
+    """An idle connection to ``url`` (newest first) with ``True`` when it has been used before, otherwise a new unconnected one."""
+    if not fresh:
+        wrong_url = []
+        found = None
+        with _state_lock:
+            while _pool:
+                pooled_url, conn = _pool.pop()
+                if pooled_url == url:
+                    found = conn
+                    break
+                wrong_url.append(conn)
+        for conn in wrong_url:
+            _close(conn)
+        if found is not None:
+            return found, True
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != 'http' or not parsed.hostname:
-        raise EngineFallback('bad_url', url)
-    conn = getattr(_local, 'conn', None)
-    if conn is None or getattr(_local, 'conn_url', None) != url:
-        _drop_connection()
-        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80,
-                                          timeout=_env_float('TTC_CS_ENGINE_CONNECT_TIMEOUT', 0.5))
-        _local.conn = conn
-        _local.conn_url = url
-    return conn
+        raise EngineError('bad_url', url)
+    return http.client.HTTPConnection(parsed.hostname, parsed.port or 80,
+                                      timeout=_env_float('TTC_CS_ENGINE_CONNECT_TIMEOUT', 0.5)), False
 
 
-def _request(method, path, body, read_timeout):
-    """One HTTP exchange. Returns (status, parsed JSON). A reused keep-alive connection that the server closed is retried once."""
+def _checkin(url, conn):
+    """Return a healthy connection to the pool, or close it when the pool is full."""
+    with _state_lock:
+        if len(_pool) < pool_limit():
+            _pool.append((url, conn))
+            return
+    _close(conn)
+
+
+# --------------------------------------------------------------------------- one HTTP exchange
+
+def _request(method, path, body, read_timeout, retry_stale=True, fresh=False):
+    """
+    One HTTP exchange. Returns (status, parsed JSON). A reused idle connection that the server had closed is replaced once when
+    ``retry_stale`` is true; otherwise :class:`_StaleConnection` is raised so that the caller can verify the engine again first.
+    """
     url = engine_url()
-    connect_timeout = _env_float('TTC_CS_ENGINE_CONNECT_TIMEOUT', 0.5)
-    for attempt in (0, 1):
-        conn = _connection(url, read_timeout)
-        reused = conn.sock is not None
+    while True:
+        conn, reused = _checkout(url, fresh)
+        connecting = False
         try:
             if conn.sock is None:
-                conn.timeout = connect_timeout
+                connecting = True
                 conn.connect()
+                connecting = False
             conn.sock.settimeout(read_timeout)
             headers = {'Content-Type': 'application/json', 'Connection': 'keep-alive'} if body is not None else {}
             conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
             data = response.read()
-            break
         except (http.client.RemoteDisconnected, http.client.CannotSendRequest, http.client.ResponseNotReady,
                 BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-            _drop_connection()
-            if reused and attempt == 0:
-                continue  # the idle keep-alive connection had been closed by the server: reconnect once
-            raise EngineFallback('connection_failed', type(e).__name__)
+            _close(conn)
+            if reused:
+                if retry_stale:
+                    fresh = True
+                    continue
+                raise _StaleConnection()
+            raise EngineError('connection_failed', type(e).__name__)
         except (socket.timeout, TimeoutError):
-            _drop_connection()
-            raise EngineFallback('timeout', path)
-        except (ConnectionRefusedError, OSError) as e:
-            _drop_connection()
-            raise EngineFallback('connection_failed', type(e).__name__)
+            _close(conn)
+            if connecting:
+                raise EngineError('connection_failed', 'connect timeout')
+            raise EngineError('timeout', path)
+        except (OSError, http.client.HTTPException) as e:
+            _close(conn)
+            raise EngineError('connection_failed', type(e).__name__)
+        except BaseException:
+            _close(conn)
+            raise
+        if response.will_close:
+            _close(conn)
+        else:
+            _checkin(url, conn)
+        break
     try:
         payload = json.loads(data.decode('utf-8'))
     except (ValueError, UnicodeDecodeError):
-        raise EngineFallback('malformed_response', 'HTTP %d' % response.status)
+        raise EngineError('malformed_response', 'HTTP %d' % response.status)
     if not isinstance(payload, dict):
-        raise EngineFallback('malformed_response', 'not an object')
+        raise EngineError('malformed_response', 'not an object')
     return response.status, payload
 
 
 def _verify():
-    """Health check: protocol version and card-database hash. Done once per URL, and again after a failure."""
-    global _verified_url
+    """Health check: protocol version, card-database hash and the engine's queue wait. Done once per URL, and again after a failure."""
+    global _verified_url, _queue_wait_s
     url = engine_url()
     with _state_lock:
         if _verified_url == url:
             return
     status, health = _request('GET', '/v1/health', None, max(_env_float('TTC_CS_ENGINE_CONNECT_TIMEOUT', 0.5), 2.0))
     if status != 200 or health.get('status') != 'ok':
-        raise EngineFallback('health_failed', 'HTTP %d' % status)
+        raise EngineError('health_failed', 'HTTP %d' % status)
     if health.get('protocol') != PROTOCOL:
-        raise EngineFallback('protocol_mismatch', 'engine speaks %r, client %r' % (health.get('protocol'), PROTOCOL))
+        raise EngineError('protocol_mismatch', 'engine speaks %r, client %r' % (health.get('protocol'), PROTOCOL))
     if health.get('cardDbSha256') != card_db_sha256():
-        raise EngineFallback('card_db_mismatch', 'engine %s, client %s' % (health.get('cardDbSha256'), card_db_sha256()))
+        raise EngineError('card_db_mismatch', 'engine %s, client %s' % (health.get('cardDbSha256'), card_db_sha256()))
+    wait_ms = health.get('queueWaitMs')
+    if isinstance(wait_ms, bool) or not isinstance(wait_ms, (int, float)) or not 0 <= wait_ms < 1e9:
+        raise EngineError('health_failed', 'queueWaitMs missing or invalid: %r' % (wait_ms,))
     with _state_lock:
         _verified_url = url
+        _queue_wait_s = wait_ms / 1000.0
 
 
 # --------------------------------------------------------------------------- the call
 
 def read_timeout_for(max_time):
+    """``max_time`` + the engine's queue wait (from its health) + a margin: the engine answers (a result or ``busy``) before this."""
     margin = _env_float('TTC_CS_ENGINE_READ_MARGIN', 5.0)
+    with _state_lock:
+        queue_wait = _queue_wait_s
     if max_time is None or (isinstance(max_time, float) and (math.isinf(max_time) or math.isnan(max_time))):
-        return 3600.0
-    return max(0.0, float(max_time)) + margin + 1.0
+        return 3600.0 + queue_wait + margin
+    return max(0.0, float(max_time)) + queue_wait + margin
 
 
 def solve(payload, max_time):
     """
     POST ``payload`` to ``/v1/solve`` and return the response dict (status ``ok`` or ``needs_fallback_candidates``).
-    Raises :class:`EngineFallback` for everything else. ``max_time`` is the search limit in seconds (None = unlimited); it
-    sets the read timeout.
+    Raises :class:`EngineError` for everything else. ``max_time`` is the search limit in seconds (None = unlimited); together with the
+    engine's queue wait it sets the read timeout.
     """
-    if breaker_open():
-        raise EngineFallback('circuit_open')
-    try:
-        _verify()
-        body = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
-        status, response = _request('POST', '/v1/solve', body, read_timeout_for(max_time))
-    except EngineFallback as e:
-        if e.reason in ('connection_failed', 'timeout', 'health_failed', 'protocol_mismatch', 'card_db_mismatch',
-                        'malformed_response'):
-            _open_breaker()
-        raise
+    body = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+    for attempt in range(3):
+        try:
+            _verify()
+            # the last attempt opens a new connection whatever the pool holds, so that a stale one can never fail it
+            status, response = _request('POST', '/v1/solve', body, read_timeout_for(max_time), retry_stale=False, fresh=attempt == 2)
+            break
+        except _StaleConnection:
+            # the idle connection was closed by the server: probably an engine restart, so verify it again before the next try
+            _invalidate_verification()
+            close_pool()
+            if attempt == 2:  # cannot happen (the last attempt opens a new connection); never loop
+                raise EngineError('connection_failed', 'stale connection')
+        except EngineError as e:
+            if e.reason in ('connection_failed', 'timeout'):
+                _invalidate_verification()  # the engine may be replaced by another build: verify again
+                close_pool()
+            raise
     state = response.get('status')
     if state in ('ok', 'needs_fallback_candidates') and status == 200:
         return response
     if state == 'busy':
-        raise EngineFallback('busy', str(response.get('reason', '')))
+        raise EngineError('busy', str(response.get('reason', '')))
     if state == 'invalid_request':
-        raise EngineFallback('invalid_request', str(response.get('message', '')))
+        raise EngineError('invalid_request', str(response.get('message', '')))
     if state == 'error':
-        raise EngineFallback('engine_error', str(response.get('message', '')))
-    raise EngineFallback('http_error', 'HTTP %d status %r' % (status, state))
+        raise EngineError('engine_error', str(response.get('message', '')))
+    raise EngineError('http_error', 'HTTP %d status %r' % (status, state))
 
 
 # --------------------------------------------------------------------------- request building helpers
@@ -274,16 +360,21 @@ def state_payload(game_state):
     }
 
 
-def number_or_fallback(value, name):
-    """``max_depth`` / ``max_time`` as Python would use them: a real number (bool and strings are left to the Python path)."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise EngineFallback('unsupported_parameter', '%s=%r' % (name, value))
+def number_or_error(value, name):
+    """
+    ``max_depth`` / ``max_time`` as Python would use them: a real number. A bool is the integer it is in Python (``True`` is 1);
+    anything else (string, null, list ...) makes the Python solver raise a TypeError, so the request is refused (HTTP 400).
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if not isinstance(value, (int, float)):
+        raise EngineError('unsupported_parameter', '%s=%r is not a number' % (name, value))
     return value
 
 
 def wire_max_depth(value):
     """Python: ``min(max_depth, 100)``; ``depth <= limit`` for depth 1, 2, ... so NaN and anything below 1 mean no level."""
-    value = number_or_fallback(value, 'max_depth')
+    value = number_or_error(value, 'max_depth')
     if isinstance(value, float) and math.isnan(value):
         return 0
     return min(value, 100)
@@ -291,7 +382,7 @@ def wire_max_depth(value):
 
 def wire_max_time(value):
     """Python: time is up once ``elapsed > max_time``. NaN and +inf never; -inf always; None on the wire = no limit."""
-    value = number_or_fallback(value, 'max_time')
+    value = number_or_error(value, 'max_time')
     if isinstance(value, float) and (math.isnan(value) or value == math.inf):
         return None
     if isinstance(value, float) and value == -math.inf:

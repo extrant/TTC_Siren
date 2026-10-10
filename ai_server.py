@@ -2026,6 +2026,9 @@ def _record_request(data):
         _engine_log.warning('request recording failed: %s', e)
 
 
+# A-20 (Phase 7 hardening): the C# engine is the only minimax solver while it is on. This function (the original Python solver, unchanged)
+# runs only when the operator has set TTC_CS_ENGINE=off by hand; it is never called as a fallback of the engine. The docstring below dates
+# from Phase 7 ("so that it can be the fallback"): that role was withdrawn by the user's decision A-20. It stays the parity reference.
 def _solve_minimax_python(game_state, data, open_mode, aggressive_mode, progress_callback, use_endgame_robust,
                           opp_unknown_count, my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids,
                           console_reporter):
@@ -2097,7 +2100,7 @@ def _solve_minimax_python(game_state, data, open_mode, aggressive_mode, progress
 
 
 def _engine_illegal(reason, detail):
-    raise csharp_engine.EngineFallback(reason, detail)
+    raise csharp_engine.EngineError(reason, detail)
 
 
 def _engine_move(game_state, wire):
@@ -2107,10 +2110,10 @@ def _engine_move(game_state, wire):
     try:
         slot, row, col, card_id = wire['slot'], wire['row'], wire['col'], wire['cardId']
     except (KeyError, TypeError):
-        raise csharp_engine.EngineFallback('malformed_response', 'move')
+        raise csharp_engine.EngineError('malformed_response', 'move')
     for value in (slot, row, col, card_id):
         if isinstance(value, bool) or not isinstance(value, int):
-            raise csharp_engine.EngineFallback('malformed_response', 'move field type')
+            raise csharp_engine.EngineError('malformed_response', 'move field type')
     player = game_state.current_player
     if not (0 <= slot < len(player.hand)):
         _engine_illegal('illegal_move', 'hand slot %d of %d' % (slot, len(player.hand)))
@@ -2159,23 +2162,24 @@ def _engine_outcome(response, game_state, wire_depth, max_time_raw, show_search_
             'timings': response.get('timings'),
         }
         return {'move': move, 'progress': progress, 'totals': totals, 'info': info}
-    except csharp_engine.EngineFallback:
+    except csharp_engine.EngineError:
         raise
     except (KeyError, TypeError, ValueError, AttributeError) as e:
-        raise csharp_engine.EngineFallback('malformed_response', '%s: %s' % (type(e).__name__, e))
+        raise csharp_engine.EngineError('malformed_response', '%s: %s' % (type(e).__name__, e))
 
 
 def _solve_minimax_with_engine(game_state, data, aggressive_mode, use_endgame_robust, opp_unknown_count,
                                my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids, show_search_progress):
     """
-    Phase 7: run the minimax path of ``ai_move`` on the C# engine. Returns ``(outcome, None)`` when the engine answered with a
-    legal move, otherwise ``(None, reason)``; the caller then runs :func:`_solve_minimax_python` exactly as before.
+    Phase 7: run the minimax path of ``ai_move`` on the C# engine and return the outcome when it answered with a legal move.
+    Since the Phase 7 hardening (A-20) the engine is the only solver on this path: any problem raises
+    :class:`csharp_engine.EngineError` and ``ai_move`` answers it with an HTTP error. The Python solver is never run instead.
 
     The request is built from ``game_state`` before any Python search touched it, so the engine sees the hand order of the
     request. If the engine needs the random fallback candidates of the robust layer (Python's legal enumeration was empty),
     this calls ``handler.generate_opponent_cards`` with the very arguments ``_build_endgame_scenarios`` would use, and sends
-    them in a second call; should anything fail after that, the random generator is restored so that the Python path draws
-    the same numbers it would have drawn without the engine.
+    them in a second call (that round trip is not a solver fallback). Should anything fail after that, the random generator is
+    restored, so that a failed request leaves no trace in it and a retry of the same request draws the same numbers.
     """
     saved_random_state = None
     try:
@@ -2223,19 +2227,30 @@ def _solve_minimax_with_engine(game_state, data, aggressive_mode, use_endgame_ro
             payload['robust']['fallbackCandidates'] = [csharp_engine.card_array(c) for c in candidates]
             response = csharp_engine.solve(payload, wire_time)
             if response.get('status') != 'ok':
-                raise csharp_engine.EngineFallback('unexpected_status', str(response.get('status')))
+                raise csharp_engine.EngineError('unexpected_status', str(response.get('status')))
 
-        outcome = _engine_outcome(response, game_state, wire_depth, max_time_raw, show_search_progress)
-        return outcome, None
-    except csharp_engine.EngineFallback as e:
-        reason = e.reason
-        _engine_log.warning('C# engine fallback (%s)', e)
-    except Exception as e:  # noqa: BLE001 - the engine is an optimisation: nothing it does may fail a request
-        reason = 'client_error'
-        _engine_log.warning('C# engine client error: %r', e)
-    if saved_random_state is not None:
-        random.setstate(saved_random_state)
-    return None, reason
+        return _engine_outcome(response, game_state, wire_depth, max_time_raw, show_search_progress)
+    except csharp_engine.EngineError:
+        if saved_random_state is not None:
+            random.setstate(saved_random_state)
+        raise
+    except Exception as e:  # noqa: BLE001 - a defect of this client code: reported as such (HTTP 500), not silently worked around
+        if saved_random_state is not None:
+            random.setstate(saved_random_state)
+        raise csharp_engine.EngineError('client_error', '%s: %s' % (type(e).__name__, e))
+
+
+def _engine_error_response(error):
+    """
+    The HTTP answer to an engine problem (A-20): a JSON error body in the usual ``{"error": ...}`` form plus ``engine`` and
+    ``engine_error`` (the reason code), status 503 (400 for a request the engine cannot be asked, 500 for a defect of this client).
+    The Python solver is not run. The failure is logged at error level.
+    """
+    _engine_log.error('C# engine failed (%s): %s', error.reason, error.detail)
+    message = 'C# engine: %s' % (error.reason if not error.detail else '%s (%s)' % (error.reason, error.detail))
+    console_ui.end_request("引擎错误")
+    console_ui.update_thinking(message)
+    return jsonify({'error': message, 'engine': 'csharp', 'engine_error': error.reason}), error.http_status
 
 
 app = Flask(__name__)
@@ -2368,7 +2383,6 @@ def ai_move():
         mc_simulations = data.get('mc_simulations', 150)  # 蒙特卡洛模拟次数
 
         engine_outcome = None
-        engine_fallback_reason = None
         if solver_type == 'monte_carlo':
             console_ui.update_input(params={"求解器": f"蒙特卡洛 (simulations={mc_simulations})"})
             console_ui.update_thinking(f"蒙特卡洛求解中 (simulations={mc_simulations})")
@@ -2383,15 +2397,19 @@ def ai_move():
         else:
             console_ui.update_input(params={"求解器": "Minimax"})
             if csharp_engine.is_enabled():
-                # Phase 7: the C# engine first. The request is built from game_state NOW, before any Python search, so the
-                # engine sees the hand order of the request (D-015 decision: Fast search + canonical hand order).
-                engine_outcome, engine_fallback_reason = _solve_minimax_with_engine(
-                    game_state, data, aggressive_mode, use_endgame_robust, opp_unknown_count,
-                    my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids, show_search_progress)
-            if engine_outcome is not None:
+                # Phase 7 / A-20: the C# engine is the only minimax solver. The request is built from game_state NOW, so the
+                # engine sees the hand order of the request (D-015 decision: Fast search + canonical hand order). Any engine
+                # problem is answered with an HTTP error; the Python solver is never run instead.
+                try:
+                    engine_outcome = _solve_minimax_with_engine(
+                        game_state, data, aggressive_mode, use_endgame_robust, opp_unknown_count,
+                        my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids, show_search_progress)
+                except csharp_engine.EngineError as engine_error:
+                    return _engine_error_response(engine_error)
                 move = engine_outcome['move']
                 search_progress_data.extend(engine_outcome['progress'])
             else:
+                # TTC_CS_ENGINE=off: set by the operator, never automatically. The unchanged Python solver.
                 move = _solve_minimax_python(
                     game_state, data, open_mode, aggressive_mode, progress_callback, use_endgame_robust,
                     opp_unknown_count, my_owner, opp_hand, used_cards, rules, board, opp_owner, npc_ids, console_reporter)
@@ -2401,9 +2419,6 @@ def ai_move():
             no_move_result = {'move': None, 'msg': '无可用动作'}
             if engine_outcome is not None:
                 no_move_result['engine'] = 'csharp'
-            elif engine_fallback_reason is not None:
-                no_move_result['engine'] = 'python'
-                no_move_result['fallback_reason'] = engine_fallback_reason
             return jsonify(no_move_result)
 
         card, (row, col) = move
@@ -2446,9 +2461,6 @@ def ai_move():
             }
         if engine_outcome is not None:
             performance_stats['engine'] = 'csharp'
-        elif engine_fallback_reason is not None:
-            performance_stats['engine'] = 'python'
-            performance_stats['fallback_reason'] = engine_fallback_reason
 
         star_map = get_card_star_map()
         star = star_map.get(card.card_id, '?')
@@ -2485,13 +2497,10 @@ def ai_move():
             'recommendation': recommendation,
             'performance_stats': performance_stats  # 添加性能统计
         }
-        # Phase 7: which solver answered (absent when the engine is switched off, so the response is unchanged then)
+        # Phase 7: the engine answered (absent when the engine is switched off by hand, so the response is unchanged then)
         if engine_outcome is not None:
             result['engine'] = 'csharp'
             result['engine_info'] = engine_outcome['info']
-        elif engine_fallback_reason is not None:
-            result['engine'] = 'python'
-            result['fallback_reason'] = engine_fallback_reason
 
         # 如果请求了搜索进度，添加到结果中
         if show_search_progress and search_progress_data:

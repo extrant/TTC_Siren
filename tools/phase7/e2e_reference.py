@@ -10,8 +10,9 @@ The C# test ``EngineEndToEndTests`` reads the output, sends the recorded engine 
 production code is changed for this: ``ai_server.ai_move`` is driven through Flask's test client, and two hooks capture what is
 needed. (1) ``csharp_engine.solve`` is replaced by a recorder, so ``ai_server._solve_minimax_with_engine`` builds the payload from the
 pristine ``game_state`` exactly as in production (including the second payload with the random fallback candidates when Python's
-legal enumeration is empty), then falls back. (2) At that moment, and before any search, the references are computed on COPIES of
-the pristine state:
+legal enumeration is empty); the recorder then raises ``EngineError('e2e_capture')``, which ``ai_move`` answers with its HTTP 503 (since
+the Phase 7 hardening there is no fallback: the Python solver is never run on that path, and this script stubs it to make sure).
+(2) At that moment, and before any search, the references are computed on COPIES of the pristine state:
   * the standard search of the Python server (``find_best_move_parallel``, with its transposition table): per completed depth the best
     score (float.hex) and move (hand slot in the request's order, row, col, card id);
   * the same iterative deepening with the transposition table switched off (no stores), which is exact depth-limited minimax: this is the
@@ -152,7 +153,7 @@ def reference_for(entry):
             robust = payload.get('robust')
             if robust is not None and robust['fallbackCandidates'] is None and _captured.get('expects_fallback'):
                 return {'protocol': 1, 'status': 'needs_fallback_candidates', 'unknownCount': 1}
-            raise S.csharp_engine.EngineFallback('e2e_capture')
+            raise S.csharp_engine.EngineError('e2e_capture')
 
         original = S._solve_minimax_with_engine
 
@@ -177,8 +178,11 @@ def reference_for(entry):
             saved_solve = S.csharp_engine.solve
             S.csharp_engine.solve = fake_solve
             try:
-                _original(game_state, data, aggressive_mode, use_endgame_robust, opp_unknown_count, my_owner, opp_hand,
-                          used_cards, rules, board, opp_owner, npc_ids, show_search_progress)
+                try:
+                    _original(game_state, data, aggressive_mode, use_endgame_robust, opp_unknown_count, my_owner, opp_hand,
+                              used_cards, rules, board, opp_owner, npc_ids, show_search_progress)
+                except S.csharp_engine.EngineError:
+                    pass  # the recorder refused to answer: the payload(s) are captured
             finally:
                 S.csharp_engine.solve = saved_solve
                 if handler:
@@ -193,17 +197,25 @@ def reference_for(entry):
                 sample = 1 if opp_unknown_count == 0 else min(24, max(16, opp_unknown_count * 12))
                 _captured['robust'] = robust_reference(game_state, used_cards, rules, opp_owner, opp_idx, sample, npc_ids,
                                                        aggressive_mode, recorded.get('cards'))
-            return None, 'e2e_capture'
+            raise S.csharp_engine.EngineError('e2e_capture')
 
         S._solve_minimax_with_engine = wrapper
         saved_python = S._solve_minimax_python
-        S._solve_minimax_python = lambda *a, **k: None
+        python_calls = []
+
+        def python_solver_must_not_run(*a, **k):
+            python_calls.append(1)
+            raise AssertionError('the Python solver ran on the engine path (A-20)')
+
+        S._solve_minimax_python = python_solver_must_not_run
         try:
             random.seed(entry['seed'])
             response = S.app.test_client().post('/ai_move', json=req)
         finally:
             S._solve_minimax_with_engine = original
             S._solve_minimax_python = saved_python
+        if python_calls:
+            raise AssertionError('request %s: the Python solver ran on the engine path' % entry['i'])
         if 'payloads' not in captured or 'py' not in captured:
             records.append({'i': entry['i'], 'max_depth': max_depth, 'error': 'not captured (HTTP %d)' % response.status_code})
             continue

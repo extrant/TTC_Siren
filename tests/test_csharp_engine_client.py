@@ -1,13 +1,17 @@
-"""Phase 7: the C# engine client and the dispatch in ``ai_move``.
+"""Phase 7 (with the Phase 7 hardening, decision A-20): the C# engine client and the dispatch in ``ai_move``.
 
-A stub HTTP server plays the engine, so every fallback reason, the circuit breaker, the ``needs_fallback_candidates`` round trip,
-the response mapping and the random-number bookkeeping can be tested without the real engine. With the engine off (or on and
-falling back) the Python path must produce exactly the response it produced before Phase 7.
+A stub HTTP server plays the engine, so every engine problem, the ``needs_fallback_candidates`` round trip, the response mapping and the
+random-number bookkeeping can be tested without the real engine. While the engine is on it is the ONLY minimax solver: every problem
+is answered with an HTTP error (503 + ``engine_error``) and the Python solver is never called (the ``python_solver`` spy counts calls
+to ``find_best_move_parallel``, ``select_endgame_robust_move`` and ``_solve_minimax_python``). With the engine off by hand
+(``TTC_CS_ENGINE=off``) the Python path must produce exactly the response it produced before Phase 7
+(tests/test_engine_off_equivalence.py).
 """
 import copy
 import json
 import os
 import random
+import socket
 import sys
 import threading
 import time
@@ -32,14 +36,17 @@ class NullUi:
 # --------------------------------------------------------------------------- stub engine
 
 class StubEngine:
-    """Answers GET /v1/health and POST /v1/solve as programmed by the test."""
+    """Answers GET /v1/health and POST /v1/solve as programmed by the test; counts the connections it accepts."""
 
-    def __init__(self):
-        self.health = {'protocol': 1, 'status': 'ok', 'cardDbSha256': csharp_engine.card_db_sha256()}
+    def __init__(self, port=0, queue_wait_ms=1000):
+        self.health = {'protocol': 1, 'status': 'ok', 'cardDbSha256': csharp_engine.card_db_sha256(), 'queueWaitMs': queue_wait_ms}
         self.health_status = 200
         self.solve = lambda payload: (200, first_legal_move_response(payload), 0.0)
         self.posts = []
         self.health_calls = 0
+        self.accepted = 0
+        self.sockets = []
+        self.keep_alive = True
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -53,6 +60,9 @@ class StubEngine:
                 self.send_response(status)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(data)))
+                if not stub.keep_alive:
+                    self.send_header('Connection', 'close')
+                    self.close_connection = True
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -72,17 +82,45 @@ class StubEngine:
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        class Server(ThreadingHTTPServer):
+            daemon_threads = True
+
+            def get_request(self):
+                request = super().get_request()
+                stub.accepted += 1
+                stub.sockets.append(request[0])
+                return request
+
+        self.server = Server(('127.0.0.1', port), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     @property
+    def port(self):
+        return self.server.server_address[1]
+
+    @property
     def url(self):
-        return 'http://127.0.0.1:%d' % self.server.server_address[1]
+        return 'http://127.0.0.1:%d' % self.port
 
     def close(self):
+        """Stop listening and drop every connection, as a killed engine process would."""
         self.server.shutdown()
         self.server.server_close()
+        self.drop_connections()
+
+    def drop_connections(self):
+        """Close the accepted connections (the engine restarted, or closed an idle keep-alive connection)."""
+        sockets, self.sockets = self.sockets, []
+        for sock in sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 def first_legal_move_response(payload):
@@ -116,13 +154,32 @@ def stub(monkeypatch):
     s = StubEngine()
     monkeypatch.setenv('TTC_CS_ENGINE', 'on')
     monkeypatch.setenv('TTC_CS_ENGINE_URL', s.url)
-    monkeypatch.setenv('TTC_CS_ENGINE_BACKOFF', '30')
     monkeypatch.setenv('TTC_CS_ENGINE_READ_MARGIN', '0')
     monkeypatch.setattr(ai_server, 'console_ui', NullUi())
     ai_server.ensure_handler_initialized()
     yield s
     s.close()
     csharp_engine.reset()
+
+
+class PythonSolverSpy:
+    """Counts calls of the Python solver entry points; calls through, so that the engine-off path still works."""
+
+    def __init__(self):
+        self.calls = []
+
+
+@pytest.fixture
+def python_solver(monkeypatch):
+    spy = PythonSolverSpy()
+    for name in ('find_best_move_parallel', 'select_endgame_robust_move', '_solve_minimax_python'):
+        real = getattr(ai_server, name)
+
+        def wrapper(*args, _real=real, _name=name, **kwargs):
+            spy.calls.append(_name)
+            return _real(*args, **kwargs)
+        monkeypatch.setattr(ai_server, name, wrapper)
+    return spy
 
 
 @pytest.fixture(scope='module')
@@ -138,40 +195,34 @@ def pick(corpus, *required, avoid=()):
     raise AssertionError('no corpus entry with tags %r' % (required,))
 
 
-def post(entry, depth=2, **overrides):
+def post_raw(entry, depth=2, **overrides):
     request = copy.deepcopy(entry['request'])
     request['max_depth'] = depth
     request.update(overrides)
     random.seed(entry['seed'])
-    client = ai_server.app.test_client()
-    response = client.post('/ai_move', json=request)
+    return ai_server.app.test_client().post('/ai_move', json=request)
+
+
+def post(entry, depth=2, **overrides):
+    response = post_raw(entry, depth, **overrides)
     assert response.status_code == 200, response.get_data(as_text=True)
     return response.get_json()
 
 
-def strip_engine_fields(body):
-    body = copy.deepcopy(body)
-    for key in ('engine', 'fallback_reason', 'engine_info'):
-        body.pop(key, None)
-    body.get('performance_stats', {}).pop('engine', None)
-    body.get('performance_stats', {}).pop('fallback_reason', None)
-    return body
-
-
-def comparable(body):
-    """The deterministic part of a response (see tools/phase7/equivalence.py for the excluded timing fields)."""
-    import equivalence
-    return equivalence.normalise(body)
-
-
-# --------------------------------------------------------------------------- engine off
+# --------------------------------------------------------------------------- engine off (the manual switch)
 
 def test_engine_off_never_contacts_the_engine_and_adds_no_fields(stub, monkeypatch, corpus):
     monkeypatch.setenv('TTC_CS_ENGINE', 'off')
     body = post(pick(corpus, 'k:3', avoid=('full_board',)))
     assert stub.posts == [] and stub.health_calls == 0
-    assert 'engine' not in body and 'fallback_reason' not in body
+    assert 'engine' not in body and 'engine_error' not in body
     assert 'engine' not in body['performance_stats']
+
+
+def test_engine_off_runs_the_python_solver(stub, monkeypatch, corpus, python_solver):
+    monkeypatch.setenv('TTC_CS_ENGINE', 'off')
+    post(pick(corpus, 'k:3', avoid=('full_board',)))
+    assert '_solve_minimax_python' in python_solver.calls and 'find_best_move_parallel' in python_solver.calls
 
 
 @pytest.mark.parametrize('value', ['off', 'OFF', '0', 'false', 'no'])
@@ -185,9 +236,21 @@ def test_the_engine_is_on_by_default(monkeypatch):
     assert csharp_engine.is_enabled()
 
 
+def test_nothing_switches_the_engine_off_automatically(stub, monkeypatch, corpus, python_solver):
+    """After every kind of failure the engine is still tried by the next request: ``is_enabled`` depends on the environment only."""
+    entry = pick(corpus, 'k:3', avoid=('full_board', 'rule:秩序', 'rule:混乱'))
+    stub.solve = lambda p: (500, {'protocol': 1, 'status': 'error', 'message': 'boom'}, 0)
+    for _ in range(3):
+        assert post_raw(entry).status_code == 503
+        assert csharp_engine.is_enabled()
+    stub.solve = lambda p: (200, first_legal_move_response(p), 0)
+    assert post(entry)['engine'] == 'csharp'
+    assert python_solver.calls == []
+
+
 # --------------------------------------------------------------------------- the engine answers
 
-def test_a_legal_engine_answer_is_used_and_reported(stub, monkeypatch, corpus):
+def test_a_legal_engine_answer_is_used_and_reported(stub, monkeypatch, corpus, python_solver):
     entry = pick(corpus, 'k:2', avoid=('full_board', 'rule:秩序'))
     body = post(entry, show_search_progress=True)
     assert body['engine'] == 'csharp'
@@ -206,6 +269,7 @@ def test_a_legal_engine_answer_is_used_and_reported(stub, monkeypatch, corpus):
     assert body['search_progress'][0]['best_score'] == 1.5
     assert body['search_progress'][1]['nodes_searched'] == 30 and body['search_progress'][1]['branching_factor'] == 12
     assert 'search_summary' in body
+    assert python_solver.calls == []
 
 
 def test_the_request_is_built_before_any_python_search_in_request_hand_order(stub, corpus):
@@ -238,117 +302,105 @@ def test_the_robust_section_describes_the_unknown_slots(stub, corpus):
     assert robust['handler'] is True and robust['fallbackCandidates'] is None
 
 
-# --------------------------------------------------------------------------- the fallback matrix
+# --------------------------------------------------------------------------- the error matrix (A-20): 503 + engine_error, no Python solver
 
-def run_with_stub(stub, monkeypatch, corpus, behaviour, expected_reason, entry=None, **kw):
+def expect_engine_error(stub, corpus, python_solver, behaviour, reason, status=503, entry=None, **kw):
+    """Program the stub with ``behaviour``, post a request and check the A-20 answer. Returns the response body."""
     entry = entry or pick(corpus, 'k:3', avoid=('full_board', 'rule:秩序', 'rule:混乱'))
-    monkeypatch.setenv('TTC_CS_ENGINE', 'off')
-    reference = post(entry)
-    monkeypatch.setenv('TTC_CS_ENGINE', 'on')
-    csharp_engine.reset()
     behaviour(stub)
-    body = post(entry, **kw)
-    assert body['engine'] == 'python', body
-    assert body['fallback_reason'] == expected_reason, body.get('fallback_reason')
-    assert body['performance_stats']['fallback_reason'] == expected_reason
-    # exactly the Python-path answer
-    assert comparable(strip_engine_fields(body)) == comparable(reference)
+    response = post_raw(entry, **kw)
+    body = response.get_json()
+    assert response.status_code == status, body
+    assert body['engine'] == 'csharp'
+    assert body['engine_error'] == reason, body
+    assert isinstance(body['error'], str) and reason in body['error']
+    assert 'card' not in body and 'pos' not in body and 'move' not in body  # no answer was computed
+    assert python_solver.calls == [], 'the Python solver ran on the engine path: %r' % python_solver.calls
     return body
 
 
-def test_fallback_busy(stub, monkeypatch, corpus):
-    run_with_stub(stub, monkeypatch, corpus, lambda s: setattr(s, 'solve', lambda p: (503, {'protocol': 1, 'status': 'busy', 'reason': 'queue_full'}, 0)), 'busy')
-    assert not csharp_engine.breaker_open()  # a busy engine is not a broken engine
+def test_error_busy(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', lambda p: (503, {'protocol': 1, 'status': 'busy', 'reason': 'queue_full'}, 0)), 'busy')
 
 
-def test_fallback_invalid_request(stub, monkeypatch, corpus):
-    run_with_stub(stub, monkeypatch, corpus, lambda s: setattr(s, 'solve', lambda p: (400, {'protocol': 1, 'status': 'invalid_request', 'message': 'x'}, 0)), 'invalid_request')
-    assert not csharp_engine.breaker_open()
+def test_error_invalid_request(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', lambda p: (400, {'protocol': 1, 'status': 'invalid_request', 'message': 'x'}, 0)), 'invalid_request')
 
 
-def test_fallback_engine_error(stub, monkeypatch, corpus):
-    run_with_stub(stub, monkeypatch, corpus, lambda s: setattr(s, 'solve', lambda p: (500, {'protocol': 1, 'status': 'error', 'message': 'boom'}, 0)), 'engine_error')
+def test_error_engine_error(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', lambda p: (500, {'protocol': 1, 'status': 'error', 'message': 'boom'}, 0)), 'engine_error')
 
 
-def test_fallback_malformed_json_opens_the_breaker(stub, monkeypatch, corpus):
-    run_with_stub(stub, monkeypatch, corpus, lambda s: setattr(s, 'solve', lambda p: (200, b'this is not json', 0)), 'malformed_response')
-    assert csharp_engine.breaker_open()
+def test_error_malformed_json(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', lambda p: (200, b'this is not json', 0)), 'malformed_response')
 
 
-def test_fallback_malformed_fields(stub, monkeypatch, corpus):
+def test_error_malformed_fields(stub, corpus, python_solver):
     def broken(payload):
         r = first_legal_move_response(payload)
         del r['totals']
         return 200, r, 0
-    run_with_stub(stub, monkeypatch, corpus, lambda s: setattr(s, 'solve', broken), 'malformed_response')
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', broken), 'malformed_response')
 
 
-def test_fallback_unknown_status(stub, monkeypatch, corpus):
-    run_with_stub(stub, monkeypatch, corpus, lambda s: setattr(s, 'solve', lambda p: (200, {'protocol': 1, 'status': 'weird'}, 0)), 'http_error')
+def test_error_unknown_status(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', lambda p: (200, {'protocol': 1, 'status': 'weird'}, 0)), 'http_error')
 
 
-def test_fallback_timeout_opens_the_breaker(stub, monkeypatch, corpus):
-    monkeypatch.setenv('TTC_CS_ENGINE_READ_MARGIN', '0')
-    run_with_stub(stub, monkeypatch, corpus, lambda s: setattr(s, 'solve', lambda p: (200, first_legal_move_response(p), 3.5)), 'timeout', max_time=0.2)
-    assert csharp_engine.breaker_open()
+def test_error_timeout(stub, monkeypatch, corpus, python_solver):
+    # read timeout = max_time 0.2 + the engine's queue wait (health: 0.3 s) + margin 0 = 0.5 s; the engine takes 2 s
+    stub.health['queueWaitMs'] = 300
+    body = expect_engine_error(stub, corpus, python_solver,
+                               lambda s: setattr(s, 'solve', lambda p: (200, first_legal_move_response(p), 2.0)), 'timeout', max_time=0.2)
+    assert 'timeout' in body['error']
 
 
-def test_fallback_connection_refused_opens_the_breaker_and_skips_the_engine_afterwards(stub, monkeypatch, corpus):
+def test_error_connection_refused_then_the_engine_comes_back(stub, corpus, python_solver):
     entry = pick(corpus, 'k:3', avoid=('full_board', 'rule:秩序', 'rule:混乱'))
-    monkeypatch.setenv('TTC_CS_ENGINE', 'off')
-    reference = post(entry)
-    monkeypatch.setenv('TTC_CS_ENGINE', 'on')
-    csharp_engine.reset()
+    port = stub.port
+    post(entry)  # verified and working
     stub.close()  # nothing listens on that port any more
-    body = post(entry)
-    # a refused connection (on Windows the refusal can take longer than the 0.5 s connect timeout: then it is a timeout)
-    assert body['fallback_reason'] in ('connection_failed', 'timeout')
-    assert comparable(strip_engine_fields(body)) == comparable(reference)
-    assert csharp_engine.breaker_open()
-    again = post(entry)
-    assert again['fallback_reason'] == 'circuit_open'  # no new connection attempt
-    # after the back-off the engine is tried again
-    monkeypatch.setenv('TTC_CS_ENGINE_BACKOFF', '0.05')
-    csharp_engine.reset()
-    post(entry)
-    csharp_engine._disabled_until = time.monotonic() - 1
-    assert not csharp_engine.breaker_open()
+    # on Windows a refused connection can take longer than the 0.5 s connect timeout: that is reported as connection_failed too
+    body = expect_engine_error(stub, corpus, python_solver, lambda s: None, 'connection_failed', entry=entry)
+    assert csharp_engine.is_enabled()
+    again = expect_engine_error(stub, corpus, python_solver, lambda s: None, 'connection_failed', entry=entry)  # still tried, no 'circuit_open'
+    assert again['engine_error'] == 'connection_failed' and body['engine_error'] == 'connection_failed'
+    # the engine is started again (on the same port): the next request is answered by it, with no back-off in between
+    revived = StubEngine(port=port)
+    try:
+        assert post(entry)['engine'] == 'csharp'
+        assert revived.health_calls >= 1  # it was verified again
+    finally:
+        revived.close()
 
 
-def test_the_breaker_closes_after_the_backoff(stub, monkeypatch, corpus):
-    entry = pick(corpus, 'k:2', avoid=('full_board', 'rule:秩序', 'rule:混乱'))
-    monkeypatch.setenv('TTC_CS_ENGINE_BACKOFF', '0.3')
-    stub.solve = lambda p: (200, b'garbage', 0)
-    assert post(entry)['fallback_reason'] == 'malformed_response'
-    assert post(entry)['fallback_reason'] == 'circuit_open'
-    time.sleep(0.4)
-    stub.solve = lambda p: (200, first_legal_move_response(p), 0)
-    assert post(entry)['engine'] == 'csharp'
-
-
-def test_fallback_protocol_mismatch(stub, monkeypatch, corpus):
-    def setup(s):
-        s.health = dict(s.health, protocol=2)
-    run_with_stub(stub, monkeypatch, corpus, setup, 'protocol_mismatch')
+def test_error_protocol_mismatch(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: s.health.update(protocol=2), 'protocol_mismatch')
     assert stub.posts == []  # never asked to solve
-    assert csharp_engine.breaker_open()
 
 
-def test_fallback_card_database_mismatch(stub, monkeypatch, corpus):
-    def setup(s):
-        s.health = dict(s.health, cardDbSha256='0' * 64)
-    run_with_stub(stub, monkeypatch, corpus, setup, 'card_db_mismatch')
+def test_error_card_database_mismatch(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: s.health.update(cardDbSha256='0' * 64), 'card_db_mismatch')
     assert stub.posts == []
 
 
-def test_fallback_health_failure(stub, monkeypatch, corpus):
-    def setup(s):
-        s.health_status = 503
-    run_with_stub(stub, monkeypatch, corpus, setup, 'health_failed')
+def test_error_health_failure(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'health_status', 503), 'health_failed')
+
+
+def test_error_health_without_queue_wait(stub, corpus, python_solver):
+    expect_engine_error(stub, corpus, python_solver, lambda s: s.health.pop('queueWaitMs'), 'health_failed')
+
+
+def test_a_failed_verification_is_not_cached_so_a_corrected_engine_is_accepted_at_once(stub, corpus, python_solver):
+    entry = pick(corpus, 'k:3', avoid=('full_board', 'rule:秩序', 'rule:混乱'))
+    expect_engine_error(stub, corpus, python_solver, lambda s: s.health.update(cardDbSha256='0' * 64), 'card_db_mismatch', entry=entry)
+    stub.health['cardDbSha256'] = csharp_engine.card_db_sha256()
+    assert post(entry)['engine'] == 'csharp'  # no breaker, no waiting
 
 
 @pytest.mark.parametrize('kind', ['slot_out_of_range', 'wrong_card_id', 'occupied_cell', 'cell_off_board', 'bad_types'])
-def test_fallback_illegal_move(stub, monkeypatch, corpus, kind):
+def test_error_illegal_move(stub, corpus, python_solver, kind):
     entry = pick(corpus, 'k:4', avoid=('full_board', 'rule:秩序', 'rule:混乱'))
 
     def bad(payload):
@@ -367,13 +419,13 @@ def test_fallback_illegal_move(stub, monkeypatch, corpus, kind):
             m['slot'] = '0'
         return 200, r, 0
     expected = 'malformed_response' if kind == 'bad_types' else 'illegal_move'
-    run_with_stub(stub, monkeypatch, corpus, lambda s: setattr(s, 'solve', bad), expected, entry=entry)
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', bad), expected, entry=entry)
 
 
-def test_fallback_a_card_that_the_order_rule_forbids(stub, monkeypatch, corpus):
+def test_error_a_card_that_the_order_rule_forbids(stub, corpus, python_solver):
     entry = pick(corpus, 'rule:秩序', 'k:3', avoid=('full_board',))
     request = entry['request']
-    # make the first card unplayable and let the stub choose exactly that one
+    # make every card unusable and let the stub choose slot 0 anyway
     for item in request['myHand'] + request['oppHand']:
         item['canUse'] = False
     entry = dict(entry, request=request)
@@ -383,26 +435,49 @@ def test_fallback_a_card_that_the_order_rule_forbids(stub, monkeypatch, corpus):
         hand = payload['state']['hands'][cur]
         cell = next(i for i, c in enumerate(payload['state']['board']) if c is None)
         return 200, ok_response({'slot': 0, 'row': cell // 3, 'col': cell % 3, 'cardId': -1 if hand[0][0] is None else hand[0][0]}, payload), 0
-    csharp_engine.reset()
-    stub.solve = bad
-    result = post(entry)
-    # every card is unusable under the order rule: the stub still names slot 0, which is not playable -> fallback to
-    # the Python path, which finds no move at all
-    assert result['move'] is None
-    assert result['engine'] == 'python' and result['fallback_reason'] == 'illegal_move'
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', bad), 'illegal_move', entry=entry)
 
 
-@pytest.mark.parametrize('name,value', [('max_depth', 'ten'), ('max_depth', True), ('max_time', '10'), ('max_time', None)])
-def test_unsupported_parameters_are_left_to_the_python_path(stub, monkeypatch, corpus, name, value):
+@pytest.mark.parametrize('name,value', [('max_depth', 'ten'), ('max_time', '10'), ('max_time', None), ('max_depth', [3])])
+def test_a_parameter_that_is_not_a_number_is_a_400_and_the_engine_is_not_asked(stub, corpus, python_solver, name, value):
     entry = pick(corpus, 'k:3', avoid=('full_board',))
-    overrides = {name: value}
     request = copy.deepcopy(entry['request'])
-    request.update(overrides)
-    request.setdefault('max_depth', 2)
+    request['max_depth'] = 2
+    request[name] = value
     random.seed(entry['seed'])
-    # whatever the Python path does with such a value (maybe a 500), the engine must not have been asked
-    ai_server.app.test_client().post('/ai_move', json=request)
-    assert stub.posts == []
+    response = ai_server.app.test_client().post('/ai_move', json=request)
+    body = response.get_json()
+    assert response.status_code == 400 and body['engine_error'] == 'unsupported_parameter' and body['engine'] == 'csharp'
+    assert stub.posts == [] and python_solver.calls == []
+
+
+def test_a_bool_is_the_integer_it_is_in_python(stub, corpus):
+    entry = pick(corpus, 'k:3', avoid=('full_board',))
+    body = post(entry, depth=True, max_time=True)
+    assert body['engine'] == 'csharp'
+    assert stub.posts[0]['maxDepth'] == 1 and stub.posts[0]['maxTime'] == 1
+
+
+def test_a_defect_of_the_client_code_is_a_500_with_a_reason(stub, monkeypatch, corpus, python_solver):
+    def boom(*a, **k):
+        raise RuntimeError('boom')
+    monkeypatch.setattr(csharp_engine, 'state_payload', boom)
+    body = expect_engine_error(stub, corpus, python_solver, lambda s: None, 'client_error', status=500)
+    assert 'RuntimeError' in body['error']
+
+
+def test_every_error_is_logged_at_error_level(stub, corpus, python_solver, caplog):
+    import logging
+    caplog.set_level(logging.WARNING, logger='ttc.engine')
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', lambda p: (503, {'protocol': 1, 'status': 'busy', 'reason': 'queue_full'}, 0)), 'busy')
+    records = [r for r in caplog.records if r.name == 'ttc.engine']
+    assert records and records[-1].levelno == logging.ERROR and 'busy' in records[-1].getMessage()
+
+
+def test_a_failed_request_is_recorded_when_recording_is_on(stub, monkeypatch, tmp_path, corpus, python_solver):
+    monkeypatch.setenv('TTC_RECORD_REQUESTS', str(tmp_path))
+    expect_engine_error(stub, corpus, python_solver, lambda s: setattr(s, 'solve', lambda p: (500, {'protocol': 1, 'status': 'error', 'message': 'boom'}, 0)), 'engine_error')
+    assert len(list(tmp_path.iterdir())) == 1
 
 
 def test_a_nan_or_infinite_time_limit_is_sent_as_no_limit():
@@ -416,7 +491,52 @@ def test_a_nan_or_infinite_time_limit_is_sent_as_no_limit():
     assert csharp_engine.wire_max_depth(2.7) == 2.7
 
 
-# --------------------------------------------------------------------------- the random fallback round trip
+def test_the_http_status_of_each_reason():
+    assert csharp_engine.EngineError('busy').http_status == 503
+    assert csharp_engine.EngineError('timeout').http_status == 503
+    assert csharp_engine.EngineError('illegal_move').http_status == 503
+    assert csharp_engine.EngineError('unsupported_parameter').http_status == 400
+    assert csharp_engine.EngineError('client_error').http_status == 500
+
+
+# --------------------------------------------------------------------------- a slow engine is waited for (review M7-1)
+
+def test_the_read_timeout_is_max_time_plus_the_engines_queue_wait_plus_a_margin(stub, monkeypatch):
+    stub.health['queueWaitMs'] = 20_000
+    monkeypatch.setenv('TTC_CS_ENGINE_READ_MARGIN', '2')
+    csharp_engine._verify()
+    assert csharp_engine.read_timeout_for(10) == pytest.approx(10 + 20 + 2)
+    assert csharp_engine.read_timeout_for(0) == pytest.approx(22)
+    assert csharp_engine.read_timeout_for(None) > 3600
+
+
+def test_an_engine_that_answers_after_the_old_timeout_is_still_waited_for(stub, monkeypatch, corpus, python_solver):
+    """
+    The old client gave up after max_time + margin + 1 s even when the engine was merely queueing; that opened the breaker and moved the
+    load to Python (M7-1). Now: max_time 0.2 + queue wait 1.5 s + margin 0.3 s = 2.0 s; the engine answers after 1.6 s (> the old
+    0.2 + 0.3 + 1 = 1.5 s) and the answer is used.
+    """
+    stub.health['queueWaitMs'] = 1500
+    monkeypatch.setenv('TTC_CS_ENGINE_READ_MARGIN', '0.3')
+    stub.solve = lambda p: (200, first_legal_move_response(p), 1.6)
+    entry = pick(corpus, 'k:3', avoid=('full_board', 'rule:秩序', 'rule:混乱'))
+    started = time.monotonic()
+    body = post(entry, max_time=0.2)
+    assert time.monotonic() - started > 1.5
+    assert body['engine'] == 'csharp'
+    assert python_solver.calls == []
+
+
+def test_a_timeout_does_not_disable_the_engine(stub, monkeypatch, corpus, python_solver):
+    stub.health['queueWaitMs'] = 100
+    entry = pick(corpus, 'k:3', avoid=('full_board', 'rule:秩序', 'rule:混乱'))
+    stub.solve = lambda p: (200, first_legal_move_response(p), 1.5)
+    expect_engine_error(stub, corpus, python_solver, lambda s: None, 'timeout', entry=entry, max_time=0.1)
+    stub.solve = lambda p: (200, first_legal_move_response(p), 0)
+    assert post(entry, max_time=0.1)['engine'] == 'csharp'  # the very next request is answered by the engine
+
+
+# --------------------------------------------------------------------------- the random fallback round trip (not a solver fallback)
 
 def fallback_stub(stub, second):
     """First call: needs_fallback_candidates; second call: ``second(payload)``."""
@@ -431,7 +551,7 @@ def fallback_stub(stub, second):
     return calls
 
 
-def test_needs_fallback_candidates_round_trip_consumes_random_numbers_like_python(stub, monkeypatch, corpus):
+def test_needs_fallback_candidates_round_trip_consumes_random_numbers_like_python(stub, monkeypatch, corpus, python_solver):
     entry = pick(corpus, 'fallback_path')
     request = copy.deepcopy(entry['request'])
     request['max_depth'] = 2
@@ -443,6 +563,7 @@ def test_needs_fallback_candidates_round_trip_consumes_random_numbers_like_pytho
     sent = stub.posts[1]['robust']['fallbackCandidates']
     assert sent is not None and all(len(card) == 13 for card in sent)
     after_engine = random.random()
+    assert python_solver.calls == []
 
     # the Python path: the same request with the engine off draws the handler's random cards at the same point
     monkeypatch.setenv('TTC_CS_ENGINE', 'off')
@@ -451,22 +572,41 @@ def test_needs_fallback_candidates_round_trip_consumes_random_numbers_like_pytho
     assert random.random() == after_engine
 
 
-def test_a_failure_after_the_fallback_candidates_restores_the_random_state(stub, monkeypatch, corpus):
+def random_state_after(stub, entry, request, behaviour):
+    stub.solve = behaviour
+    random.seed(entry['seed'])
+    response = ai_server.app.test_client().post('/ai_move', json=request)
+    return response, random.random()
+
+
+def test_a_failure_after_the_fallback_candidates_leaves_no_trace_in_the_random_generator(stub, corpus, python_solver):
+    """A failed request must not consume random numbers, so that a retry of the same request samples the same cards."""
     entry = pick(corpus, 'fallback_path')
     request = copy.deepcopy(entry['request'])
     request['max_depth'] = 2
-    fallback_stub(stub, lambda p: (503, {'protocol': 1, 'status': 'busy', 'reason': 'queue_full'}, 0))
+    busy = (503, {'protocol': 1, 'status': 'busy', 'reason': 'queue_full'}, 0)
 
-    random.seed(entry['seed'])
-    body = ai_server.app.test_client().post('/ai_move', json=request).get_json()
-    assert body['engine'] == 'python' and body['fallback_reason'] == 'busy'
-    after_fallback = random.random()
+    # reference: the engine fails at once, before the handler's random cards are drawn
+    response, expected = random_state_after(stub, entry, request, lambda p: busy)
+    assert response.status_code == 503 and response.get_json()['engine_error'] == 'busy'
 
-    monkeypatch.setenv('TTC_CS_ENGINE', 'off')
+    # the engine asks for the fallback candidates (the handler draws random cards) and then fails
+    fallback_stub(stub, lambda p: busy)
+    response, after_failure = random_state_after(stub, entry, request, stub.solve)
+    assert response.status_code == 503 and response.get_json()['engine_error'] == 'busy'
+    assert after_failure == expected
+    assert python_solver.calls == []
+
+
+def test_error_unexpected_status_after_the_fallback_candidates(stub, corpus, python_solver):
+    entry = pick(corpus, 'fallback_path')
+    request = copy.deepcopy(entry['request'])
+    request['max_depth'] = 2
+    fallback_stub(stub, lambda p: (200, {'protocol': 1, 'status': 'needs_fallback_candidates', 'unknownCount': 1}, 0))
     random.seed(entry['seed'])
-    reference = ai_server.app.test_client().post('/ai_move', json=request).get_json()
-    assert random.random() == after_fallback  # the engine attempt left no trace in the generator
-    assert comparable(strip_engine_fields(body)) == comparable(reference)
+    response = ai_server.app.test_client().post('/ai_move', json=request)
+    assert response.status_code == 503 and response.get_json()['engine_error'] == 'unexpected_status'
+    assert python_solver.calls == []
 
 
 # --------------------------------------------------------------------------- the opt-in recorder
@@ -487,27 +627,3 @@ def test_the_request_recorder_is_off_by_default_and_records_when_asked(tmp_path,
     assert saved['request']['myOwner'] == entry['request']['myOwner']
     state = saved['random_state']
     random.setstate((state[0], tuple(state[1]), state[2]))  # a valid generator state: what a replay needs
-
-
-# --------------------------------------------------------------------------- the remaining reasons
-
-def test_fallback_unexpected_status_after_the_fallback_candidates(stub, monkeypatch, corpus):
-    entry = pick(corpus, 'fallback_path')
-    request = copy.deepcopy(entry['request'])
-    request['max_depth'] = 2
-    fallback_stub(stub, lambda p: (200, {'protocol': 1, 'status': 'needs_fallback_candidates', 'unknownCount': 1}, 0))
-    random.seed(entry['seed'])
-    body = ai_server.app.test_client().post('/ai_move', json=request).get_json()
-    assert body['engine'] == 'python' and body['fallback_reason'] == 'unexpected_status'
-    after = random.random()
-    monkeypatch.setenv('TTC_CS_ENGINE', 'off')
-    random.seed(entry['seed'])
-    ai_server.app.test_client().post('/ai_move', json=request)
-    assert random.random() == after  # the generator was restored for the Python path
-
-
-def test_fallback_client_error_never_fails_the_request(stub, monkeypatch, corpus):
-    def boom(*a, **k):
-        raise RuntimeError('boom')
-    monkeypatch.setattr(csharp_engine, 'state_payload', boom)
-    run_with_stub(stub, monkeypatch, corpus, lambda s: None, 'client_error')

@@ -60,7 +60,7 @@ def load(*paths):
                     if r.get('errors'):
                         extra += ' err=%d' % r['errors']
                     if target == 'flask':
-                        extra += ' fb=%d' % r.get('fallbacks', 0)
+                        extra += ' engine_errors=%d' % sum((r.get('engine_error_counts') or {}).values())
                     parts.append('%.1f / %.3f%s' % (r['throughput_rps'], r['p95_s'], extra))
             print('| %s | %s |' % (label, ' | '.join(parts)))
     if memory:
