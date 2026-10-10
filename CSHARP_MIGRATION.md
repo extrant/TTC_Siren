@@ -123,7 +123,7 @@ ai_server.ai_move()                                   ai_server.py:1999
 
 - **生成**（minimax 内联，`ai.py:489`）：`for card in current_player.get_playable_cards(rules)`（秩序/混乱时过滤 `can_use`，否则全部手牌，按手牌当前顺序）`for pos in board.available_positions()`（行优先空格）。Move = `(card对象, (row, col))`。最多 5×9=45。
 - **应用** `make_move(row, col, card)`：
-  1. `hand_card = 手牌中第一张 card_id 相同的卡`（不是按对象身份！见 D-004）；格子非空或找不到则返回 None。
+  1. `hand_card = 手牌中第一张 card_id 相同的卡`（不是按对象身份！见 D-004）**【2026-10-10 更正：D-004 已在两边修复（FIXED-BOTH）——现在先按对象身份找，找不到才退回按 card_id；这里描述的是修复前的行为】**；格子非空或找不到则返回 None。
   2. 若规则含同类强化/弱化：快照所有棋盘卡（按格子）和 **双方手牌（按当前下标）** 的 `type_modifier`。
   3. `card.owner = 当前玩家颜色`；放到棋盘；`hand.remove(hand_card)`（按身份移除）。
   4. `resolve_flip_with_record`（见 §1.5）。
@@ -424,7 +424,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 5. `GenerateMoves(Span<Move>)`：手牌当前顺序 ×（秩序/混乱时只取 `can_use`）× 行优先空格。
 6. `MakeMove/UndoMove`：完全按 §1.4/§1.5 的语义，包括 D-001、D-003 的复现（用 `// PY-QUIRK(Dxxx)` 标注；D-002 已修复，见 §4）；同类规则只在打出的卡有类型时重算；两条同类规则同时存在时强化优先。
 7. `CountCards / IsGameOver / GetWinner`（按 card.owner 统计棋盘和手牌）。
-8. 输入校验：同一手牌内 card_id 重复（D-004）时抛出明确的异常（parity 工具会排除这类输入）；手牌数量超过容量也抛异常。
+8. 输入校验：同一手牌内 card_id 重复（D-004）时抛出明确的异常（parity 工具会排除这类输入）；手牌数量超过容量也抛异常。**【2026-10-10 更正：重复 id 的拒绝已移除（D-004 FIXED-BOTH，Q-2），C# 现在接受重复 id；手牌容量检查仍在】**
 9. Python parity 工具 `tools/parity/py_rules_trace.py`（只 import Python 代码，不修改）：固定种子生成随机局面（随机真实卡牌，包括有类型卡、全 0 卡、预测 id 1000+、None id 但不重复；随机规则子集；随机 `can_use`；随机初始棋盘与 owner；随机先手），执行随机的 make / undo 交错序列，每一步之后导出完整状态（每个实例的 owner、mod、display4、base4、id、type、can_use；9 格；有序手牌；当前玩家；`available_moves` 列表）→ JSONL golden。
 10. 把 `tests/test_game_rules.py` 中与规则相关的测试移植为 C# 测试：compare/王牌杀手/逆转、同数正反例、加算使用修正值、连携/不连携、同类强化/弱化计数、undo 恢复 owner。
 11. `tools/bench/py_bench.py`（即附录 A 的脚本）提交进仓库；C# Bench 加入 make/undo 吞吐量 microbenchmark。
@@ -884,7 +884,7 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 
 0. **Phase 1–6 完成（Phase 6 审查门禁 `PASS_WITH_NONBLOCKING_FINDINGS`，2026-10-10，`docs/reviews/OPUS_PHASE6_REVIEW.md` §7/§9）。** 下一步由用户决定：(a) 让审查者复核 Phase 5、D-004 修复（FIXED-BOTH）与 Phase 6（重点：各保留提交的位级不变量；cold 比较必须用交替构建的 `ab_interleaved.py`，块顺序会产生假回归，`PHASE6_OPTIMIZATION.md` §5）；(b) 是否推送本地提交 `a0eb193`（D-004）与 `48e38cd`…`290b15e`（Phase 6）到 `origin/csharp-solver-migration`（CLAUDE.md §8：未经授权不推送）；(c) 是否授权 root parallelism（Phase 6 末尾，需单独批准）；(d) Phase 7（D-015 已定：标准搜索用 Fast，robust 前恢复规范手牌顺序）。**Phase 7 未开始，需要用户明确授权。**
 1. 工作区状态（2026-10-10）：分支 `csharp-solver-migration`，Phase 5 的 5 个提交已推送（`710a70e..b6e4ea4`）；本地未推送：`a0eb193`（D-004 双边修复 + D-019）、`48e38cd`（Phase 6 工具）、`3a77dbe`（C1）、`6b61630`（C3）、`2c226bb`（C4a）、`782a3b5`（C7）、`c6d3115`（文档）、`17c07c7`（回退 C3）、`290b15e`（重新应用 C3）及随后的文档提交。`csharp/.vs/`、`bin/`、`obj/`、golden 数据不入库。PR #1 已关闭，`main` 仍是 `eb60a02`。
-2. Phase 6 开始前不需要用户回答问题。已有默认的待决问题：Q-2（D-004，Phase 7 前）、Q-3（连携一层，Phase 8 前）、Q-6（PyPy baseline，按默认 CPython）。
+2. Phase 6 开始前不需要用户回答问题。已有默认的待决问题：~~Q-2（D-004，Phase 7 前）~~（**已决定并完成，2026-10-09：两边修复，FIXED-BOTH**）、Q-3（连携一层，Phase 8 前）、Q-6（PyPy baseline，按默认 CPython）。
 3. 仍未处理的审查遗留项：M4-3（搜索后的手牌顺序/显示边与 Python 对比、golden 偏向后期局面——**D-015 说明手牌顺序对 robust 选择有影响，Phase 7 前必须处理**）、L4-1 到 L4-7、O4-1 到 O4-3、Phase 3 的 L-1 到 L-12 与 O-1 到 O-5（见 §12.7）。
 
 ---
@@ -921,11 +921,11 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | 复审 | **`PASS_TO_PHASE_4`** | 复审报告 §15（H-1/2/3 均 RESOLVED，无回归） |
 | 创建 PR → 撤回 | 见 12.1 | 用户要求"撤销提交；已推送到分支就不要提到 main" → 关闭 PR #1，保留分支提交 |
 | **Q-5** | **决定：选项 (b)** | 用户，2026-10-07：Fast 只允许在分数完全相等的走法之间与 Python 不同，逐条验证、报告 |
-| **Phase 4** Zobrist / bound-aware TT / Fast | **DONE**（2026-10-07，`/goal @.claude/phase_goal.md` + Q-5 = (b)） | 验收见 §7 Phase 4；改动未提交 |
+| **Phase 4** Zobrist / bound-aware TT / Fast | **DONE**（2026-10-07，`/goal @.claude/phase_goal.md` + Q-5 = (b)） | 验收见 §7 Phase 4；改动未提交**（已更正：Phase 4 的提交 `1f2d0a9`/`9faf189`/`710a70e` 早已推送）** |
 | 独立审查 Phase 4 | 初审 `BLOCK_PHASE_5`（H4-1），整改后 **`PASS_TO_PHASE_5`** | `docs/reviews/OPUS_PHASE4_REVIEW.md`（§13 复审） |
 | 推送分支 | DONE | 用户于 2026-10-08 明确要求：`d0ef721..710a70e` 推送到 `origin/csharp-solver-migration`（`main` 未动） |
 | M4-1、M4-2 | DONE（2026-10-08） | 用户要求在生成任何 Phase 5 golden 之前先解决，不扩大为 Phase 4 清理 |
-| **Phase 5** 精确残局 / robust / 场景 / benchmark | **DONE**（2026-10-08，`/goal @.claude/phase_goal.md`） | 验收见 §7 Phase 5；Q-4、Q-6 保持默认；改动未提交 |
+| **Phase 5** 精确残局 / robust / 场景 / benchmark | **DONE**（2026-10-08，`/goal @.claude/phase_goal.md`） | 验收见 §7 Phase 5；Q-4、Q-6 保持默认；改动未提交**（已更正：Phase 5 的 5 个提交 `e10574a`…`b6e4ea4` 已于 2026-10-09 推送）** |
 | **Phase 6** | **DONE**（2026-10-10）；审查门禁 **`PASS_WITH_NONBLOCKING_FINDINGS`**（`docs/reviews/OPUS_PHASE6_REVIEW.md`） | 用户 2026-10-09 授权 `.claude/phase6_goal.md`：A 推送 Phase 5（`b6e4ea4`）、B Q-2/D-004 双边修复（`a0eb193`，本地）、C 性能优化（4 个保留提交，本地）；详见 §7 Phase 6 交付记录 |
 
 ### 12.3 代码地图（`csharp/`，.NET `net10.0`，`Nullable`、`TreatWarningsAsErrors`）
@@ -973,7 +973,7 @@ python tools/bench/py_endgame_bench.py --out tools/bench/endgame_bench_positions
 
 ### 12.5 关键设计决定（汇总；细节见 §7 各 Phase 记录与 §8、§4）
 
-1. **Python 是参考实现**；已知怪异行为由 C# 复现并以 `// PY-QUIRK(Dxxx)` 标注：D-001（undo 把卡追加到手牌末尾）、D-003（显示边不随 undo 恢复，`evaluate_move` 读显示边）、D-004（手牌内重复 id → C# 在载入时抛异常）、D-005/D-006（TT key 拼接冲突、TT 无 bound）、D-007（终局仍用启发式）、D-013（连携只有一层）、D-014（ID 不会提前停）。**D-002 已修复并同步到两边（FIXED-BOTH）。**
+1. **Python 是参考实现**；已知怪异行为由 C# 复现并以 `// PY-QUIRK(Dxxx)` 标注：D-001（undo 把卡追加到手牌末尾）、D-003（显示边不随 undo 恢复，`evaluate_move` 读显示边）、D-004（手牌内重复 id → C# 在载入时抛异常）**【已更正：已修复（FIXED-BOTH），C# 接受重复 id，见 D-004/D-019】**、D-005/D-006（TT key 拼接冲突、TT 无 bound）、D-007（终局仍用启发式）、D-013（连携只有一层）、D-014（ID 不会提前停）。**D-002 已修复并同步到两边（FIXED-BOTH）。**
 2. **浮点按位比较**：`float.hex()` ↔ `BitConverter.DoubleToInt64Bits`；严格保持 Python 的运算与累加顺序；不用 epsilon、不用 FMA。
 3. **Move 的身份是卡实例 `(Inst, Cell)`**，不是手牌槽位（D-001 会在每次 make/undo 后重排手牌）。这个错误在 Phase 3 真实发生过（`open_none` depth 2：Python −4.56，C# −1.375），审查 H-3 把它从类型层面消除。Phase 4 的 TT 走法、history、killer 必须用 `Move`。
 4. **翻转记录用两个 9 位 mask**（`FlipMask` + `FlipFromNoneMask`），因为 Python 的 owner 是三值（`None` 的卡也会被翻）。
@@ -999,7 +999,7 @@ python tools/bench/py_endgame_bench.py --out tools/bench/endgame_bench_positions
 
 **需要用户回答**
 - ~~Q-5~~ 已决定：选项 (b)（用户，2026-10-07），Phase 4 已实现并验证（§7 Phase 4）。
-- Q-2（D-004 重复手牌 id，Phase 7 前）、Q-3（连携只有一层是否有意，Phase 8 前）、Q-4（474/475 空行是否排除，Phase 5 前）、Q-6（是否需要 PyPy baseline，Phase 5 前）：默认值见 §9。
+- ~~Q-2（D-004 重复手牌 id，Phase 7 前）~~（**已决定并完成：FIXED-BOTH**）、Q-3（连携只有一层是否有意，Phase 8 前）、Q-4（474/475 空行是否排除，Phase 5 前）、Q-6（是否需要 PyPy baseline，Phase 5 前）：默认值见 §9。
 - 是否把 `csharp-solver-migration` 合并到 `main`（目前用户不希望提 PR）；是否撤销已推送的提交（需要强制推送授权）。
 
 **审查遗留项（`docs/reviews/OPUS_PHASE3_REVIEW.md`；未处理）**

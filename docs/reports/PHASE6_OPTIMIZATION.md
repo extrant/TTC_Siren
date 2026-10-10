@@ -1,7 +1,7 @@
 # Phase 6 — profiler-driven single-thread optimisation (2026-10-09/10)
 
 Scope: `.claude/phase6_goal.md` step C. Single thread only: no `unsafe`, no SIMD, no multithreading, no root parallelism, no change
-of any search or rule semantics. Every kept change is its own local commit (not pushed). C3 was reverted once and re-applied after a re-measurement (`6b61630`, `17c07c7`, `290b15e`, see §5).
+of any search or rule semantics. Every kept change is its own local commit (not pushed). C3 was reverted **twice** and re-applied twice after re-measurements (`6b61630`; revert `17c07c7` / re-apply `290b15e`; revert `7878d1f` / re-apply `a4d86ad`; see §5). The net code of C3 is `6b61630`.
 
 **All timings in this report are pinned to the P-core set `0xFFF`** (i7-13650HX, logical processors 0–11; both Python and C#),
 measured with `tools/bench/run_cs_pinned.py` (C# only, independent process runs, min/median/max) and
@@ -115,16 +115,20 @@ of these runs are the same as in the baseline (exact `mid3_ascension` 10.8–11.
 
 ## 5. Caveats and one judgement call
 
-- **Cold 22-item suite and the keep decision for C3.** A first block comparison (`run_cs_pinned.py --cold`, baseline runs then candidate runs) showed C3 about 12% slower on the cold
-  22-item suite. I wrongly kept C3 anyway and called it a deviation; the Stop-hook check pointed out that the rule is not mine to relax, so C3 was reverted (`17c07c7`) and re-measured.
-  **Under the goal's own protocol** (`run_cs_pinned.py --modes search --runs 7 --cold --affinity auto`, medians, run order alternated, four repetitions; `phase6/c3_cold_protocol.txt`) the candidate
-  against its predecessor is −7.6%, +4.4%, +7.7%, +1.8% (median of the four medians +2.2%): the sign changes with the repetition, the predecessor's own median moves by 16% (0.0423–0.0489 s) and the
-  candidate's by 3%. A regression above 3% is therefore **not repeatable** under the protocol, and the keep rule ("repeatable ... at least 3% on the targeted workload and no regression above 3% elsewhere")
-  is met: warm −20%, Fast cold −18..−28%, cold 22-item suite within noise. Supporting evidence, not the basis of the decision: alternating the builds sample by sample (25 samples each,
-  `tools/bench/ab_interleaved.py`) gives original 0.0431 s, with C3 0.0423 s, without C3 0.0500 s (+16%), i.e. removing C3 is what makes the cold suite slower. C3 was re-applied as `290b15e`
-  Reverting C3 does not restore the cold figure under the same protocol either: the tree without C3 (`17c07c7`, 11 process runs, `run_cs_pinned.py --cold`, original build first) measured the cold
-  22-item suite at 0.0500 s against 0.0405 s for the original (+23.5%), so the cold number of this micro-suite is not attributable to C3.
-  (code identical to `6b61630`; both commits stay in the local history). The block-order figures of §4 are kept as measured and labelled.
+- **Cold 22-item suite and the keep decision for C3.**
+  - *First measurement.* A block comparison (`run_cs_pinned.py --cold`, all baseline runs and then all candidate runs) showed C3 about 12% slower on the cold 22-item suite. I wrongly kept C3
+    anyway and called it a deviation; the Stop-hook check pointed out that the rule is not mine to relax, so C3 was reverted (`17c07c7`) and re-measured.
+  - *Goal protocol.* `run_cs_pinned.py --modes search --runs 7 --cold --affinity auto`, medians, run order alternated, four repetitions (`phase6/c3_cold_protocol.txt`): the candidate against its
+    predecessor is −7.6%, +4.4%, +7.7%, +1.8% (median of the four medians +2.2%). The sign changes with the repetition; the predecessor's own median moves by 16% (0.0423–0.0489 s), the candidate's by 3%.
+    A regression above 3% is therefore not repeatable, and the keep rule (a repeatable gain of at least 3% on the targeted workload, no regression above 3% elsewhere) is met:
+    warm −20%, Fast cold −18..−28%, cold 22-item suite within noise. C3 was re-applied as `290b15e`.
+  - *Reverting C3 does not restore the cold figure either.* The tree without C3 (`17c07c7`, 11 process runs, `run_cs_pinned.py --cold`, original build first) measured the cold 22-item suite at
+    0.0500 s against 0.0405 s for the original (+23.5%), so the cold number of this micro-suite is not attributable to C3. A second strict-reading trial (revert `7878d1f`, four repetitions,
+    `phase6/c3_cold_protocol.txt`) gave a median of medians of +4.6% for the tree without C3, always at the slow mode of the original; it was undone by `a4d86ad`.
+  - *Deciding evidence (independent reviewer, `OPUS_PHASE6_REVIEW.md` §6; builds alternating sample by sample, pinned):* cold compat 22 items, 21 samples: original `48e38cd` **0.04793 s**,
+    final **0.04021 s** (−16.1%), build without C3 (`17c07c7`) **0.04883 s**, so C3 itself is −17.6% cold. My own alternating measurement agrees in sign (`tools/bench/ab_interleaved.py`: original 0.0431 s,
+    with C3 0.0423 s, without C3 0.0500 s). Removing C3 is what makes the cold suite slower.
+  - The block-order figures of §4 are kept as measured and labelled.
 - Cold figures are bimodal (JIT timing); read them as ranges and compare builds only with alternating samples (`ab_interleaved.py`). Block-order cold comparisons in this report (e.g. robust pipeline −1% in the first cold table) disagree with the alternating ones (−23%) for that reason.
 - Short items (µs) are timer-limited; `exact end5_same_plus` / `mid4_rev_ace` changes of ±10% are noise.
 - Everything is versus CPython 3.11.4 (Q-6); PyPy is unmeasured.
