@@ -3,6 +3,8 @@ using System.Text.Json;
 using TTC.Siren.Compat;
 using TTC.Siren.Core;
 using TTC.Siren.Engine;
+using TTC.Siren.Explain;
+using TTC.Siren.Search;
 
 namespace TTC.Siren.Server;
 
@@ -13,7 +15,14 @@ public sealed class AiMoveOutcome
     public Dictionary<string, object?> Body = new();
     public ulong Seed;
     public ParsedRequest? Parsed;
+    public SolveRequest? Request;
     public SolveResult? Solve;
+    public ExplanationFacts? Facts;
+    public ExplanationText? Text;
+    public string? ExplainLevel;
+
+    /// <summary>The "generated unknown card" flag of every hand card at parse time (before the analysis reorders the hands), per player, in request order.</summary>
+    public bool[][]? Generated;
     public LMove? Move;
     public string? EngineError;
 }
@@ -32,13 +41,15 @@ public sealed class AiMoveService
     private readonly SolveService _solve;
     private readonly WorkerPool _pool;
     private readonly LegacyAnalysis _analysis;
+    private readonly TemplateSet _templates;
 
-    public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool)
+    public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool, TemplateSet? templates = null)
     {
         _catalog = catalog;
         _solve = solve;
         _pool = pool;
         _analysis = new LegacyAnalysis(catalog);
+        _templates = templates ?? TemplateSet.Default();
     }
 
     public CardCatalog Catalog => _catalog;
@@ -78,15 +89,23 @@ public sealed class AiMoveService
             }
             var req = parse.Request;
             outcome.Parsed = req;
+            outcome.Generated = req.State.Players.Select(p => p.Hand.Select(RequestParser.IsGeneratedUnknownCard).ToArray()).ToArray();
 
             // max_depth / max_time as the Python client of the engine reads them (wire_max_depth, wire_max_time)
             if (!ReadNumber(data, "max_depth", 10, out var depthNumber, out string? depthError)) return Finish(outcome, EngineError("unsupported_parameter", depthError!, 400));
             if (!ReadNumber(data, "max_time", 10, out var timeNumber, out string? timeError)) return Finish(outcome, EngineError("unsupported_parameter", timeError!, 400));
             object wireDepth = depthNumber.Value is { } dv && dv > 100 ? 100L : depthNumber.Boxed;
 
-            var (result, engineError) = await RunEngineAsync(parser, req, depthNumber, timeNumber, ct).ConfigureAwait(false);
+            // the request's explain level: "full" asks for the alternatives too; anything else is "brief"
+            string explainLevel = data.TryGetProperty("explain", out var explainValue) && explainValue.ValueKind == JsonValueKind.String &&
+                                  explainValue.GetString() == "full" ? "full" : "brief";
+            outcome.ExplainLevel = explainLevel;
+
+            var (result, engineError, solveRequest, facts, explainError, explainMs) =
+                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, ct).ConfigureAwait(false);
             if (engineError is not null) return Finish(outcome, engineError);
             outcome.Solve = result;
+            outcome.Request = solveRequest;
 
             // ---- _engine_move: the engine names a hand slot of the request order
             var state = req.State;
@@ -201,6 +220,32 @@ public sealed class AiMoveService
                 body["search_progress"] = progress;
                 body["search_summary"] = LegacyAnalysis.GenerateSearchSummary(progress);
             }
+            // new, additive: the explanation (facts v2 and the text made from them)
+            ((Dictionary<string, object?>)((Dictionary<string, object?>)body["engine_info"]!)["timings"]!)["explainMs"] = explainMs;
+            if (facts is not null)
+            {
+                // the explanation never breaks the answer: a failure of the facts or of the wording is reported next to the move
+                try
+                {
+                    outcome.Facts = facts;
+                    outcome.Text = ExplanationRenderer.Render(facts, _templates);
+                    body["explanation"] = new Dictionary<string, object?>
+                    {
+                        ["version"] = ExplanationFacts.Version,
+                        ["level"] = explainLevel,
+                        ["language"] = _templates.Language,
+                        ["facts"] = facts.ToJson(),
+                        ["text"] = new Dictionary<string, object?> { ["brief"] = outcome.Text.Brief, ["full"] = outcome.Text.Full },
+                    };
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    outcome.Facts = null;
+                    outcome.Text = null;
+                    body["explanation_error"] = "render: " + e.GetType().Name + ": " + e.Message;
+                }
+            }
+            else if (explainError is not null) body["explanation_error"] = explainError;
             if (data.TryGetProperty("solver", out var solver) && solver.ValueKind == JsonValueKind.String && solver.GetString() == "monte_carlo") AddSolverNote(body);
             outcome.Body = body;
             return outcome;
@@ -283,7 +328,8 @@ public sealed class AiMoveService
         }
     }
 
-    private async Task<(SolveResult? Result, AiMoveOutcome? Error)> RunEngineAsync(RequestParser parser, ParsedRequest req, Num depth, Num time, CancellationToken ct)
+    private async Task<(SolveResult? Result, AiMoveOutcome? Error, SolveRequest? Request, ExplanationFacts? Facts, string? ExplainError, double ExplainMs)> RunEngineAsync(
+        RequestParser parser, ParsedRequest req, Num depth, Num time, string explainLevel, CancellationToken ct)
     {
         SolveRequest request;
         try
@@ -292,12 +338,13 @@ public sealed class AiMoveService
         }
         catch (RequestException e)
         {
-            return (null, EngineError("invalid_request", e.Message, 503));
+            return (null, EngineError("invalid_request", e.Message, 503), null, null, null, 0);
         }
 
         var (worker, reason) = await _pool.AcquireAsync(ct).ConfigureAwait(false);
         if (worker is null)
-            return (null, EngineError("busy", reason == BusyReason.QueueFull ? "queue_full" : reason == BusyReason.QueueTimeout ? "queue_timeout" : "aborted", 503));
+            return (null, EngineError("busy", reason == BusyReason.QueueFull ? "queue_full" : reason == BusyReason.QueueTimeout ? "queue_timeout" : "aborted", 503),
+                null, null, null, 0);
         try
         {
             var result = _solve.Solve(request, worker);
@@ -311,13 +358,31 @@ public sealed class AiMoveService
                 var candidates = parser.Handler.GenerateOpponentCards(unknown, req.Rules, new HashSet<int>(req.UsedCards), req.Board, knownOpp, req.OppOwner, true);
                 request = RequestReader.Parse(BuildPayload(req, depth, time, candidates));
                 result = _solve.Solve(request, worker);
-                if (result.Status != SolveResult.Ok) return (null, EngineError("unexpected_status", result.Status, 503));
+                if (result.Status != SolveResult.Ok) return (null, EngineError("unexpected_status", result.Status, 503), null, null, null, 0);
             }
-            return (result, null);
+
+            // the explanation, while this worker (and the table of the search it just ran) is still ours
+            ExplanationFacts? facts = null;
+            string? explainError = null;
+            double explainMs = 0;
+            if (result.Final is not null)
+            {
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
+                {
+                    facts = Explainer.Build(BuildExplainInput(req, request, result, worker, explainLevel == "full"));
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    explainError = e.GetType().Name + ": " + e.Message;
+                }
+                explainMs = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+            }
+            return (result, null, request, facts, explainError, explainMs);
         }
         catch (RequestException e)
         {
-            return (null, EngineError("invalid_request", e.Message, 503));
+            return (null, EngineError("invalid_request", e.Message, 503), null, null, null, 0);
         }
         catch (PyException)
         {
@@ -325,12 +390,67 @@ public sealed class AiMoveService
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            return (null, EngineError("engine_error", e.GetType().Name + ": " + e.Message, 503));
+            return (null, EngineError("engine_error", e.GetType().Name + ": " + e.Message, 503), null, null, null, 0);
         }
         finally
         {
             _pool.Release(worker);
         }
+    }
+
+    /// <summary>
+    /// How the cards of the side NOT to move were assumed. Normally that is the request's opponent hand (the plugin asks on its own turn); if the
+    /// side to move is the request's opponent, it is the plugin user's own hand, which has no NPC pool.
+    /// </summary>
+    private static UnknownInfo UnknownInfoOf(ParsedRequest req, int mover)
+    {
+        int moverIdx = mover;
+        int ownIdx = req.MyOwner == "red" ? 0 : 1; // the request's own hand is players[ownIdx]
+        bool nonMoverIsRequestOpponent = moverIdx == ownIdx;
+        var sampling = nonMoverIsRequestOpponent ? req.OppSampling : req.OwnSampling;
+        return nonMoverIsRequestOpponent
+            ? new UnknownInfo(sampling.Strategy, sampling.PrimaryRule, req.NpcName, req.NpcIds.Count)
+            : new UnknownInfo(sampling.Strategy, sampling.PrimaryRule, null, 0);
+    }
+
+    private ExplainInput BuildExplainInput(ParsedRequest req, SolveRequest request, SolveResult result, WorkerContext worker, bool full)
+    {
+        var final = result.Final!.Value;
+        (int Slot, int Row, int Col)? standard = result.Standard is { } s ? (s.Slot, s.Row, s.Col) : null;
+        var generated = req.State.Players.Select(p => p.Hand.Select(RequestParser.IsGeneratedUnknownCard).ToArray()).ToArray();
+        bool sameMove = standard is { } sm && sm.Slot == final.Slot && sm.Row == final.Row && sm.Col == final.Col;
+
+        RobustInput? robust = null;
+        if (result.Robust is { } rb && request.Robust is { } rr)
+        {
+            robust = new RobustInput
+            {
+                Opponent = rr.Opponent, Generated = rr.Generated, SampleCount = rr.SampleCount, NpcIds = rr.NpcIds, FallbackCandidates = rr.FallbackCandidates,
+                Scenarios = rb.Scenarios, Overridden = rb.Overridden,
+                Candidates = rb.Candidates.Select(c => new RobustCandidate(c.Move.Slot, c.Move.Row, c.Move.Col, c.Move.CardId, c.FinalScore, c.SafetyRatio, c.RobustScore, c.CornerRisk)).ToList(),
+                RobustMove = rb.RobustMove is { } rm ? (rm.Slot, rm.Row, rm.Col) : null,
+            };
+        }
+
+        return new ExplainInput
+        {
+            Db = _catalog.Db,
+            State = request.State,
+            ChosenSlot = final.Slot, Row = final.Row, Col = final.Col,
+            Aggressive = req.Aggressive,
+            Full = full,
+            DepthCompleted = result.DepthCompleted,
+            DepthRequested = request.MaxDepth,
+            Nodes = result.Nodes,
+            SearchMs = result.SearchMs,
+            StandardScore = result.StandardScore,
+            StandardMove = standard,
+            Tt = sameMove ? worker.Tt : null,
+            Robust = robust,
+            Unknown = UnknownInfoOf(req, request.State.Current),
+            NpcIds = req.NpcIds.Where(i => i <= int.MaxValue).Select(i => (int)i).ToList(),
+            Generated = generated,
+        };
     }
 
     /// <summary>The engine request exactly as Python's client builds it (<c>csharp_engine.state_payload</c> and <c>_solve_minimax_with_engine</c>).</summary>

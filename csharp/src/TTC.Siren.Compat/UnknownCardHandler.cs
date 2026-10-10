@@ -76,6 +76,19 @@ public sealed class UnknownCardHandler
         }
     }
 
+    /// <summary>The rule family that drives the sampling (for the explanation facts): the opponent model's primary rule, or the first matching family for the own hand.</summary>
+    public string PrimaryRuleOf(IReadOnlyList<string> rules, bool isOpponent)
+    {
+        if (isOpponent) return DeterminePrimaryRule(rules);
+        foreach (var name in new[] { "选拔", "同数", "加算" })
+            if (rules.Contains(name)) return name;
+        if (rules.Contains("同类强化")) return "同类强化";
+        if (rules.Contains("同类弱化")) return "同类弱化";
+        foreach (var name in new[] { "逆转", "王牌杀手" })
+            if (rules.Contains(name)) return name;
+        return "balanced";
+    }
+
     private static double BoardOccupancy(LBoard? board) => board is null ? 0.0 : board.Occupancy() / 9.0;
 
     private List<LCard> SmartSamplingByRules(List<LCard> available, int maxSamples, IReadOnlyList<string> rules, LBoard? board,

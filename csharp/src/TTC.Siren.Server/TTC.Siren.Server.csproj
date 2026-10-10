@@ -14,6 +14,7 @@
     <ProjectReference Include="..\TTC.Siren.Core\TTC.Siren.Core.csproj" />
     <ProjectReference Include="..\TTC.Siren.Search\TTC.Siren.Search.csproj" />
     <ProjectReference Include="..\TTC.Siren.Compat\TTC.Siren.Compat.csproj" />
+    <ProjectReference Include="..\TTC.Siren.Explain\TTC.Siren.Explain.csproj" />
     <ProjectReference Include="..\TTC.Siren.Engine\TTC.Siren.Engine.csproj" />
   </ItemGroup>
 

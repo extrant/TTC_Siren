@@ -29,7 +29,7 @@ public class AiMoveParityTests
             or "search_progress[].time_elapsed" or "search_progress[].time_remaining" or "search_progress[].nodes_per_second"
             or "search_summary.total_time_seconds" or "search_summary.search_efficiency";
 
-    internal static readonly string[] AdditiveKeys = { "solver_used", "solver_note" };
+    internal static readonly string[] AdditiveKeys = { "solver_used", "solver_note", "explanation" };
 
     internal static AiMoveService CreateService(int workers = 2, int ttEntries = TtEntries)
     {
