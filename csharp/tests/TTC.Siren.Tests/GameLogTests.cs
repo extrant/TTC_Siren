@@ -58,6 +58,7 @@ public sealed class GameLogTests : IDisposable
         {
             Host = "127.0.0.1", Port = 0, Workers = 2, TtEntries = AiMoveParityTests.TtEntries,
             GameLog = new GameLogOptions { Directory = _dir, RetentionDays = retentionDays, GapMinutes = 15 },
+            Security = new TTC.Siren.Server.Security.SecurityOptions { RequireKey = false, DefaultBurst = 1000, DefaultRatePerMinute = 100000, DefaultMaxInFlight = 64 },
         };
         var host = ServerHost.Create(options, authenticator: auth, time: time);
         await host.StartAsync();

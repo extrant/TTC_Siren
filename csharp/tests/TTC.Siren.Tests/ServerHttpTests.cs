@@ -31,6 +31,7 @@ public class ServerHttpTests : IDisposable
         {
             Host = "127.0.0.1", Port = 0, Workers = 2, TtEntries = AiMoveParityTests.TtEntries, TestSeedHeader = testSeedHeader,
             GameLog = new TTC.Siren.Server.GameLog.GameLogOptions { Directory = LogDir },
+            Security = new TTC.Siren.Server.Security.SecurityOptions { RequireKey = false, DefaultBurst = 1000, DefaultRatePerMinute = 100000, DefaultMaxInFlight = 64 },
         };
         var host = ServerHost.Create(options);
         await host.StartAsync();
