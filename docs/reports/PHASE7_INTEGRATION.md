@@ -320,3 +320,20 @@ Reading the numbers (this machine only):
 * Flask's built-in server remains the HTTP front end (development server; see `docs/DEPLOY_WINDOWS.md` for a WSGI option). One connection per request thread is opened to the engine when the
   front end creates a new thread per connection.
 * Not done by design: root parallelism, Lazy SMP, any performance work on the search, replacing Flask, porting `parse_hand`/sampling/analysis text/Monte Carlo (Phase 8).
+
+---
+
+## Notes added after the independent review (2026-10-10, Phase 7 hardening)
+
+The text above is the Phase 7 delivery as it was; it is not rewritten. Two notes:
+
+**Absolute latencies vary between sessions (review L7-2).** The reviewer re-ran the pinned measurements of section 8.1 and found every absolute time 35-45% lower than the
+figures above, on **both** sides (Python and engine) and in the same proportion (request 7: about 440x in this report, about 470x in the review; Python's time-limited depth on
+opening 27 rose from 5 to 6). It is a difference in the state of the machine between the two sessions, not an error in either measurement. The figures in this report are the
+conservative ones. Absolute seconds, requests per second and memory figures of different sessions must not be compared with each other; **only ratios and comparisons made inside one
+session (same machine state, same pinning, interleaved or back to back) are meaningful.** The same holds for every later measurement in `docs/reports/PHASE7_HARDENING.md`.
+
+**The automatic fallback described in sections 1, 3 and 4 was withdrawn** by the user's decision A-20 (`CSHARP_MIGRATION.md` section 8): while the engine is on it is the only
+minimax solver, and every engine problem is answered with HTTP 503 and an `engine_error` code. The fallback matrix of section 4 is replaced by the error matrix in
+`docs/reports/PHASE7_HARDENING.md` and `docs/DEPLOY_WINDOWS.md` section 6; the circuit breaker no longer exists. The measurements of this report (latency, load, memory, the end-to-end
+and equivalence comparisons) are unaffected: they never involved a fallback.

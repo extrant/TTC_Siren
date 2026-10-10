@@ -1,14 +1,20 @@
 # Deploying the C# engine on Windows Server (Phase 7)
 
 The Python `ai_server` (Flask) parses requests, samples unknown cards and writes the analysis text. For the **minimax** solver it sends the
-fully determined position to a local C# engine over HTTP (`127.0.0.1` only) and uses the engine's answer. If the engine is missing, busy,
-slow, speaks another protocol, loaded another card database, or returns a move that is not legal, the server **automatically falls back to
-the unchanged Python solver**. `solver=monte_carlo` never uses the engine.
+fully determined position to a local C# engine over HTTP (`127.0.0.1` only) and uses the engine's answer. **Since the Phase 7 hardening (decision A-20)
+the engine is required for the minimax solver: there is no automatic fallback to the Python solver.** When the engine is missing, busy for too long, slow,
+speaks another protocol, loaded another card database, or returns a move that is not legal, `/ai_move` answers with an HTTP error (503 plus an
+`engine_error` code, section 6) and the game client may retry. The only way to use the Python solver is the operator's manual switch `TTC_CS_ENGINE=off`
+(section 7). `solver=monte_carlo` never uses the engine.
 
 ```
 client -> Flask ai_server (Python) --HTTP 127.0.0.1:5300--> TTC.Siren.Engine (one process, a pool of worker threads)
-                         \-- on any problem --> the original Python search (fallback)
+                         \-- engine problem --> HTTP 503 {"engine_error": ...}   (no Python search)
+                         \-- TTC_CS_ENGINE=off (set by hand) --> the original Python search
 ```
+
+**A machine without the engine** (a development box, a server where it is not installed yet) must set `TTC_CS_ENGINE=off`, otherwise every minimax request there
+answers 503 `connection_failed`.
 
 ## 1. What you need
 
@@ -37,8 +43,8 @@ Settings come from `appsettings.json` (section `Engine`) and from the command li
 | `--host` | `Engine:Host` | `127.0.0.1` | Listen address. **Must be a loopback address.** The engine refuses to start on another address unless `--allow-remote` is given. It has no authentication; never expose it. |
 | `--port` | `Engine:Port` | `5300` | TCP port. |
 | `--workers` | `Engine:Workers` | number of logical CPUs | Searches that run at the same time (see section 8). |
-| `--queue` | `Engine:QueueLimit` | `64` | Requests that may wait for a worker. More are answered `busy` (HTTP 503) at once, and the Python server falls back to its own solver for them. |
-| `--queue-wait-ms` | `Engine:QueueWaitMs` | `30000` | How long a queued request waits for a worker before it is answered `busy`. |
+| `--queue` | `Engine:QueueLimit` | `256` | Requests that may wait for a worker. More are answered `busy` (HTTP 503) at once, which the Python server passes on as 503 `busy`. |
+| `--queue-wait-ms` | `Engine:QueueWaitMs` | `60000` | How long a queued request waits for a worker before it is answered `busy`. `/v1/health` reports it as `queueWaitMs`; the Python client's read timeout is `max_time` + this + a margin, so a queued request is always answered by the engine (a result or `busy`) and never by a client timeout. |
 | `--card-db` | `Engine:CardDbPath` | found above the application folder | Absolute path of `幻卡数据库.csv`. Set it explicitly on a server. |
 | `--tt-entries` | `Engine:TtEntries` | `4194304` | Entries (24 bytes each) of every worker's transposition table: 4 Mi entries = 96 MiB per worker. Power of two. |
 | `--memo-entries` | `Engine:MemoEntries` | `32768` | Entries of every worker's exact-endgame memo (0.75 MiB). |
@@ -46,9 +52,20 @@ Settings come from `appsettings.json` (section `Engine`) and from the command li
 Example `appsettings.json` next to the executable:
 
 ```json
-{ "Engine": { "Port": 5300, "Workers": 16, "QueueLimit": 64, "QueueWaitMs": 30000,
+{ "Engine": { "Port": 5300, "Workers": 16, "QueueLimit": 256, "QueueWaitMs": 60000,
               "CardDbPath": "C:\\ttc\\data\\幻卡数据库.csv" } }
 ```
+
+**Why a deep queue and a long wait.** The Python solver is no longer a way out, and it was about 100 times slower per search anyway, so a request is better
+off waiting for a free worker. A request that waits is dropped without a search if its HTTP connection has been closed meanwhile (the client gave up);
+a search that is already running is never interrupted. Size the wait to the longest delay your game clients accept: a request that has waited `queue-wait-ms`
+gets 503 `busy`, and a full queue answers 503 `busy` at once.
+
+**Garbage collector.** The engine runs with **Server GC, non-concurrent**, written explicitly in the project file and visible in the published `TTC.Siren.Engine.runtimeconfig.json`
+(`"System.GC.Server": true`, `"System.GC.Concurrent": false`); `/v1/health` reports `serverGc`. It was chosen by measurement (`docs/reports/phase7/gc/gc_table.txt`,
+`docs/reports/PHASE7_HARDENING.md` section 7): equal to workstation GC for openings and mid-games, faster for the very short robust-endgame requests on the P-cores, same memory.
+Server GC keeps one heap per logical CPU it may use; on the 32-thread server that is 32 small heaps, which was not measured there. If memory matters more than throughput,
+`DOTNET_gcServer=0` in the engine's environment switches to workstation GC without a rebuild.
 
 Run it once by hand to see that it works:
 
@@ -84,30 +101,62 @@ All optional, read from environment variables of the Python process (set them as
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TTC_CS_ENGINE` | `on` | `off` (also `0`, `false`, `no`) disables the engine completely: the server then behaves exactly as before Phase 7 and does not contact it. |
+| `TTC_CS_ENGINE` | `on` | `off` (also `0`, `false`, `no`) is the **manual** switch: the minimax solver then runs in Python exactly as before Phase 7 and the engine is never contacted. It is never set automatically. |
 | `TTC_CS_ENGINE_URL` | `http://127.0.0.1:5300` | Where the engine listens. |
-| `TTC_CS_ENGINE_CONNECT_TIMEOUT` | `0.5` | Seconds to wait for the connection. On Windows a refused connection to a closed port can take longer than this; it is then reported as a timeout. |
-| `TTC_CS_ENGINE_READ_MARGIN` | `5` | Seconds added to the request's `max_time` for the read timeout. |
-| `TTC_CS_ENGINE_BACKOFF` | `30` | Seconds the engine is skipped after a connection-level failure, so that a dead engine costs one timeout, not one per request. |
+| `TTC_CS_ENGINE_CONNECT_TIMEOUT` | `0.5` | Seconds to wait for the connection. On Windows a refused connection to a closed port can take longer than this; it is then reported as `connection_failed`. |
+| `TTC_CS_ENGINE_READ_MARGIN` | `5` | Seconds added to `max_time` + the engine's queue wait (from `/v1/health`) for the read timeout of a solve. With the defaults a request waits at most 10 + 60 + 5 = 75 s. |
+| `TTC_CS_ENGINE_POOL_SIZE` | `32` | Idle keep-alive connections the Python process keeps to the engine (one process-wide pool, reused by every request thread). More connections may be open during a burst; the surplus is closed afterwards. |
 | `TTC_RECORD_REQUESTS` | unset | If set to a folder, every `/ai_move` request is stored there with the state of Python's random generator (for replay). **This stores users' requests**; use it only where that is acceptable. |
 
-Every response that went through the engine path carries `"engine": "csharp"`; a response where the engine was tried and the Python solver answered
-carries `"engine": "python"` and `"fallback_reason"` (`busy`, `timeout`, `connection_failed`, `circuit_open`, `protocol_mismatch`,
-`card_db_mismatch`, `illegal_move`, ...). With `TTC_CS_ENGINE=off` neither field is present. Fallbacks are also logged by the logger `ttc.engine`.
+(`TTC_CS_ENGINE_BACKOFF` of Phase 7 no longer exists: there is no circuit breaker. A failure never disables the engine; the next request tries again and the health is
+verified again after any connection-level failure.)
 
-The server's own start-up is unchanged (`app.run(threaded=True)`). That is Flask's development server; for production you may want a WSGI server
-for Windows, for example `pip install waitress` and `waitress-serve --listen=127.0.0.1:5000 --threads=16 ai_server:app`. Phase 7 does not change how the
-Python server is started.
+**What the game client receives when the engine cannot answer** (the Python solver is not run):
+
+```
+HTTP 503   {"error": "C# engine: busy (queue_full)", "engine": "csharp", "engine_error": "busy"}
+```
+
+| `engine_error` | HTTP | Meaning |
+|---|---|---|
+| `connection_failed` | 503 | The engine is not running or not reachable (also a connect timeout, a reset connection). |
+| `timeout` | 503 | No answer within `max_time` + queue wait + margin. |
+| `busy` | 503 | The engine's queue is full (`queue_full`) or the request waited `queue-wait-ms` (`queue_timeout`). |
+| `engine_error` | 503 | The engine reported an internal error (its HTTP 500). |
+| `invalid_request` | 503 | The engine rejected the position (its HTTP 400). |
+| `malformed_response`, `http_error`, `unexpected_status` | 503 | The answer was not what the protocol says. |
+| `protocol_mismatch`, `card_db_mismatch`, `health_failed` | 503 | The engine is another version, loaded another card database, or its health check failed. Not cached: a corrected engine is accepted by the next request. |
+| `illegal_move` | 503 | The engine's move is not legal for the position (should not happen; keep the request, see `TTC_RECORD_REQUESTS`). |
+| `unsupported_parameter` | 400 | `max_depth` / `max_time` of the request is not a number (the Python solver would have raised a TypeError). A bool counts as the integer it is in Python. |
+| `client_error` | 500 | A defect in the Python client code itself. |
+
+A successful engine answer carries `"engine": "csharp"` and `engine_info`; with `TTC_CS_ENGINE=off` neither field is present.
+
+**Monitoring.** Every failure is logged by the logger `ttc.engine` at **error** level (`C# engine failed (<code>): <detail>`); alert on these lines. The engine's
+`GET /v1/health` shows the live state: `idleWorkers`, `queued`, `queueLimit`, `queueWaitMs`, `busyAnswers` (requests answered `busy`), `abandonedSkipped`
+(queued requests dropped because the client had gone), `served`, `workersCreated`, `tableMemoryBytes`, `serverGc`. A growing `queued` with no idle workers
+means the engine needs more workers or the traffic is too high.
+
+**Front end.** `python app.py` still starts Flask's development server (`app.run(threaded=True)`, one thread per request) and works with the connection
+pool. The recommended production front end is the optional launcher `serve_waitress.py`, which serves the same application with waitress and a fixed thread pool:
+
+```
+pip install waitress
+python serve_waitress.py --host 127.0.0.1 --port 5000 --threads 16        (add --no-console when running as a service)
+```
+
+It performs the same initialisation as `app.py` and does not change `app.py`. `--threads` is the number of requests one Python process works on at once.
 
 ## 7. Health check, start order, switching off, rollback
 
 * **Health check:** `Invoke-RestMethod http://127.0.0.1:5300/v1/health` (or `curl`). Expected: `"status":"ok"`, `"protocol":1`, the card-database `cardDbSha256`,
   `workers`, `idleWorkers`, `queued`, `busyAnswers`. The hash must equal the SHA-256 of the CSV the Python server loads
   (`Get-FileHash C:\ttc\data\幻卡数据库.csv -Algorithm SHA256`).
-* **Start order:** engine first, then the Python server. If the Python server starts first, it simply falls back until the engine answers (after at most
-  the back-off time).
-* **Switch the engine off** (without stopping anything else): set `TTC_CS_ENGINE=off` for the Python server and restart it; optionally `sc.exe stop TTCSirenEngine`.
-* **Roll back:** the Python code path is the old one. Setting `TTC_CS_ENGINE=off` is a complete rollback of behaviour; no data is written by the engine.
+* **Start order:** engine first, then the Python server. If the Python server starts first, its minimax requests answer 503 `connection_failed` until the engine
+  is up; the first request after that verifies the health and works (no waiting period).
+* **Switch the engine off** (manual, by the operator): set `TTC_CS_ENGINE=off` for the Python server and restart it; the Python solver then answers minimax
+  requests (about 100 times slower). Use it on any machine without an engine and as an emergency measure; it is never switched on or off automatically.
+* **Roll back:** `TTC_CS_ENGINE=off` restores the behaviour of the code before Phase 7 exactly (verified on the whole request corpus); no data is written by the engine.
 
 ## 8. Choosing the number of workers, memory
 
@@ -137,17 +186,21 @@ throughput grows with the number of workers up to about the number of physical c
    settings (`max_depth` 10, `max_time` 10 s) and prints one JSON line per cell: requests per second and latency p50/p95/p99/max.
 4. Choose the smallest worker count after which requests per second no longer grow noticeably (expect the knee near 16, and the 32 hardware threads to add little).
    Keep the p95 latency below `max_time` plus a few seconds: when the machine is oversubscribed, searches run into their time limit and play weaker.
-5. Set `--workers` accordingly (section 4) and keep `--queue` small: a request that waits longer than it would take Python to answer is better served by the fallback.
+5. Set `--workers` accordingly (section 4). Do **not** keep the queue short in the hope that Python takes the overflow: there is no fallback, and Python would be about
+   100 times slower anyway. Keep the defaults (`--queue 256 --queue-wait-ms 60000`) or size the wait to what your game clients accept; a request that waits is answered
+   by the engine, and only a full queue or an expired wait gives 503 `busy`.
 
 The numbers measured on the development machine (i7-13650HX, 6 P-cores + 8 E-cores) are **not** predictions for the server.
 
 ## 9. Troubleshooting
 
-| Symptom | Likely cause |
+| Symptom (HTTP 503 unless noted) | Likely cause |
 |---|---|
-| Responses show `"engine": "python"`, `"fallback_reason": "card_db_mismatch"` | The engine loaded another CSV. Pass the same absolute path with `--card-db`. |
-| `"fallback_reason": "protocol_mismatch"` | The engine and the Python files are from different versions; redeploy both. |
-| `"fallback_reason": "busy"` | More concurrent requests than workers + queue. Raise `--workers` (if CPUs allow) or `--queue`. |
-| `"fallback_reason": "connection_failed"` or `"timeout"` then `"circuit_open"` | The engine is not running or not answering; check the service and the health URL. The Python server retries after the back-off. |
-| `"fallback_reason": "illegal_move"` | The engine returned a move that Python's state does not allow (should not happen; the response is the Python answer; please keep the recorded request, see `TTC_RECORD_REQUESTS`). |
+| `"engine_error": "card_db_mismatch"` | The engine loaded another CSV. Pass the same absolute path with `--card-db`. |
+| `"engine_error": "protocol_mismatch"` | The engine and the Python files are from different versions; redeploy both. |
+| `"engine_error": "busy"` | The queue is full (`queue_full`) or the wait ran out (`queue_timeout`). Raise `--workers` (if CPUs allow) or `--queue` / `--queue-wait-ms`, or reduce the traffic. |
+| `"engine_error": "connection_failed"` | The engine is not running or not answering; check the service and the health URL. On a machine without an engine set `TTC_CS_ENGINE=off`. |
+| `"engine_error": "timeout"` | The engine did not answer within `max_time` + queue wait + margin; look at `queued` / `idleWorkers` in the health. |
+| `"engine_error": "illegal_move"` | The engine returned a move that Python's state does not allow (should not happen; please keep the recorded request, see `TTC_RECORD_REQUESTS`). |
+| `"engine_error": "unsupported_parameter"` (HTTP 400) | `max_depth` / `max_time` in the request is not a number. |
 | The engine does not start: "Refusing to listen on non-loopback address" | Intended. Use `127.0.0.1`. |
