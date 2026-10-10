@@ -43,10 +43,12 @@ internal static class GoldenSources
     };
 
     /// <summary>The repository-relative files (forward slashes) a golden file of this kind must be bound to.</summary>
-    public static SortedSet<string> Required(string repoRoot, string kind)
+    public static SortedSet<string> Required(string repoRoot, string kind) => Required(repoRoot, Patterns(kind));
+
+    public static SortedSet<string> Required(string repoRoot, IEnumerable<string> patterns)
     {
         var files = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (string pattern in Patterns(kind))
+        foreach (string pattern in patterns)
         {
             if (pattern.Contains('*'))
             {
@@ -85,7 +87,11 @@ internal static class GoldenSources
     /// Null if the header (the object that holds <c>source_sha256</c> and <c>python_version</c>) matches the working
     /// tree and the running Python; otherwise a description of the first mismatch.
     /// </summary>
-    public static string? Check(JsonElement header, string repoRoot, string kind, string pythonVersion)
+    public static string? Check(JsonElement header, string repoRoot, string kind, string pythonVersion) =>
+        Check(header, repoRoot, Patterns(kind), pythonVersion);
+
+    /// <summary>The same check for a file set given explicitly (the Phase 8A goldens, see GoldenSources8).</summary>
+    public static string? Check(JsonElement header, string repoRoot, IEnumerable<string> patterns, string pythonVersion)
     {
         if (!header.TryGetProperty("python_version", out var pv) || pv.ValueKind != JsonValueKind.String)
             return "header has no python_version (golden predates source binding)";
@@ -94,7 +100,7 @@ internal static class GoldenSources
         if (!header.TryGetProperty("source_sha256", out var sources) || sources.ValueKind != JsonValueKind.Object)
             return "header has no source_sha256 (golden predates source binding)";
 
-        var required = Required(repoRoot, kind);
+        var required = Required(repoRoot, patterns);
         var listed = new SortedSet<string>(sources.EnumerateObject().Select(p => p.Name), StringComparer.Ordinal);
         if (!required.SetEquals(listed))
         {
