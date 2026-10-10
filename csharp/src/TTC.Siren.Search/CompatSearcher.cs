@@ -22,6 +22,13 @@ public sealed class SearchStats
     public readonly sbyte[] BestInstanceHistory = new sbyte[MaxLevels]; // -1 = None
     public readonly byte[] BestCellHistory = new byte[MaxLevels];
 
+    // Per-level snapshots taken when a level completes (statistics only, written by FastSearcher's iterative deepening; one clock
+    // read per level, never per node): the clock at the start of the search and at the end of each level, and the running totals.
+    public long StartTimestamp;
+    public readonly long[] LevelEndTimestamp = new long[MaxLevels];
+    public readonly long[] LevelTtHitsTotal = new long[MaxLevels];
+    public readonly long[] LevelCutoffsTotal = new long[MaxLevels];
+
     public void Reset()
     {
         NodesSearched = TtHits = TtCutoffs = AlphaBetaCutoffs = MoveEvaluations = 0;
@@ -42,10 +49,27 @@ public readonly struct SearchLimits
     /// </summary>
     public readonly long NodeBudget;
 
+    /// <summary>
+    /// Review L-2. <c>double.NaN</c> means "no limit": Python's <c>elapsed &gt; NaN</c> is never true. A limit of zero or less is
+    /// "already over" (the deadline lies in the past), like Python's <c>elapsed &gt; limit</c> for a limit below the first clock
+    /// reading. <c>default(SearchLimits)</c> is the zero limit, i.e. already over; use <see cref="Unlimited"/> for "never".
+    /// </summary>
     public SearchLimits(double timeLimitSeconds, long nodeBudget = long.MaxValue)
     {
-        TimeLimitSeconds = timeLimitSeconds;
+        TimeLimitSeconds = double.IsNaN(timeLimitSeconds) ? double.PositiveInfinity : timeLimitSeconds;
         NodeBudget = nodeBudget;
+    }
+
+    /// <summary>
+    /// The clock value at which time is up for a search that starts at <paramref name="startTimestamp"/>: in the past for a limit
+    /// of zero or less, <see cref="long.MaxValue"/> when the limit is too large to represent (effectively never).
+    /// Callers read the clock only when <see cref="TimeLimitSeconds"/> is finite.
+    /// </summary>
+    public long DeadlineFrom(long startTimestamp)
+    {
+        if (TimeLimitSeconds <= 0.0) return startTimestamp - 1;
+        double ticks = TimeLimitSeconds * Stopwatch.Frequency;
+        return ticks >= long.MaxValue / 4.0 ? long.MaxValue : startTimestamp + (long)ticks;
     }
 
     public static SearchLimits Unlimited => new(double.PositiveInfinity);
@@ -95,6 +119,9 @@ public sealed class CompatSearcher
     /// against. Everything else (ordering, history, clock, statistics) is unchanged.
     /// </summary>
     public bool UseTranspositionTable { get; set; } = true;
+
+    /// <summary>Python <c>find_best_move_parallel</c>: <c>max_depth=min(max_depth, 100)</c>.</summary>
+    public const int PythonMaxDepth = 100;
 
     public SearchStats Stats { get; } = new();
     public HistoryTable History { get; }
@@ -147,6 +174,8 @@ public sealed class CompatSearcher
     /// </summary>
     public SearchResult RunIterativeDeepening(int maxDepth, bool aggressive, SearchLimits limits)
     {
+        // Review L-1. Python: find_best_move_parallel passes min(max_depth, 100). The per-level statistics hold 128 levels.
+        maxDepth = Math.Min(maxDepth, PythonMaxDepth);
         _tt.NewGeneration();
         Stats.Reset();
         History.Clear();
@@ -208,8 +237,7 @@ public sealed class CompatSearcher
         _aggressive = aggressive;
         _nodeBudget = limits.NodeBudget;
         _timed = !double.IsPositiveInfinity(limits.TimeLimitSeconds);
-        if (_timed)
-            _deadlineTimestamp = Stopwatch.GetTimestamp() + (long)(limits.TimeLimitSeconds * Stopwatch.Frequency);
+        if (_timed) _deadlineTimestamp = limits.DeadlineFrom(Stopwatch.GetTimestamp());
     }
 
     private bool IsTimeUp() =>

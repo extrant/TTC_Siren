@@ -50,6 +50,20 @@ public sealed class CardSnapshot
         sb.Append(',').Append(CanUse ? '1' : '0').Append(']');
     }
 
+    /// <summary>Review L-9: "r", "b" or null only. Any other value used to be read as blue, silently.</summary>
+    private static byte ParseOwner(JsonElement e)
+    {
+        if (e.ValueKind == JsonValueKind.Null) return OwnerId.None;
+        return e.ValueKind == JsonValueKind.String && e.GetString() is { } text
+            ? text switch
+            {
+                "r" => OwnerId.Red,
+                "b" => OwnerId.Blue,
+                _ => throw new InvalidGameStateException($"Unknown owner '{text}' (expected \"r\", \"b\" or null)"),
+            }
+            : throw new InvalidGameStateException($"Owner must be \"r\", \"b\" or null, got {e.ValueKind}");
+    }
+
     /// <summary>
     /// Parses the compact golden form
     /// <c>[id|null, type|null, "r"|"b"|null, mod, bu,br,bd,bl, du,dr,dd,dl, canUse(0/1)]</c>.
@@ -60,7 +74,7 @@ public sealed class CardSnapshot
         {
             Id = e[0].ValueKind == JsonValueKind.Null ? -1 : e[0].GetInt32(),
             Type = e[1].ValueKind == JsonValueKind.Null ? null : e[1].GetString(),
-            Owner = e[2].ValueKind == JsonValueKind.Null ? OwnerId.None : e[2].GetString() == "r" ? OwnerId.Red : OwnerId.Blue,
+            Owner = ParseOwner(e[2]),
             Mod = e[3].GetInt32(),
             CanUse = e[12].GetInt32() != 0,
         };

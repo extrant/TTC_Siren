@@ -91,6 +91,7 @@ public sealed class FastSearcher
     {
         if ((uint)maxDepth > MaxDepth) throw new ArgumentOutOfRangeException(nameof(maxDepth), maxDepth, $"maxDepth must be 0..{MaxDepth}");
         Begin(limits, aggressive, clearTable);
+        Stats.StartTimestamp = Stopwatch.GetTimestamp();
 
         int bestInst = -1, bestCell = 0;
         double bestScore = 0;
@@ -114,6 +115,9 @@ public sealed class FastSearcher
                 Stats.BestScoreHistory[level] = score;
                 Stats.BestInstanceHistory[level] = (sbyte)_rootInst;
                 Stats.BestCellHistory[level] = (byte)_rootCell;
+                Stats.LevelEndTimestamp[level] = Stopwatch.GetTimestamp(); // statistics only: once per level
+                Stats.LevelTtHitsTotal[level] = Stats.TtHits;
+                Stats.LevelCutoffsTotal[level] = Stats.AlphaBetaCutoffs;
 
                 // Nothing deeper can change the result once the whole tree is covered, or if the root side cannot move.
                 if (_stopped || depth >= empties || _rootInst < 0) break;
@@ -138,7 +142,7 @@ public sealed class FastSearcher
         _aggressive = aggressive;
         _nodeBudget = limits.NodeBudget;
         _timed = !double.IsPositiveInfinity(limits.TimeLimitSeconds);
-        if (_timed) _deadlineTimestamp = Stopwatch.GetTimestamp() + (long)(limits.TimeLimitSeconds * Stopwatch.Frequency);
+        if (_timed) _deadlineTimestamp = limits.DeadlineFrom(Stopwatch.GetTimestamp());
         _stopped = false;
         _rootInst = -1;
         _rootCell = 0;
