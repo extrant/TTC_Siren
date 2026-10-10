@@ -1,5 +1,7 @@
 # TTC_Siren — Goal: push Phase 7, then Phase 7 hardening (engine-only minimax path, connection pool, harness deadlock)
 
+> **STATUS: COMPLETED AND REVIEWED (2026-10-10).** Gate `PASS_WITH_NONBLOCKING_FINDINGS` (`docs/reviews/OPUS_PHASE7_HARDENING_REVIEW.md`). **Do not run this goal again.** If a session still has this goal active (for example a Stop hook asks for its final report), the goal is stale: clear it or start a new session, and never redo this work. Kept for the record only.
+
 Run with: `/goal @.claude/phase7_hardening_goal.md` — **in a new session**. If an older goal (Phase 6 or Phase 7) is still active in a session, clear it first or open a new one. Those goals are finished, and their Stop-hook condition would block this session (that happened at the end of Phase 7).
 
 The user authorized the following on 2026-10-10 (recorded in `CSHARP_MIGRATION.md` §0 row 7, §8 A-20 and §9 Q-8). Do them **in this order**, as separate logical changes:
