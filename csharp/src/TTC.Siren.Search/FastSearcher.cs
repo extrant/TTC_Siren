@@ -3,6 +3,18 @@ using TTC.Siren.Core;
 
 namespace TTC.Siren.Search;
 
+/// <summary>What the per-level callback of <see cref="FastSearcher.RunIterativeDeepening"/> reports after a completed level.</summary>
+/// <param name="Depth">The completed depth (1-based).</param>
+/// <param name="Score">The root score of this level.</param>
+/// <param name="BestInstance">Card instance of the best move, -1 if the side to move has no move.</param>
+/// <param name="BestCell">Row-major cell (0..8) of the best move.</param>
+/// <param name="NodesTotal">Nodes searched so far, all levels.</param>
+/// <param name="TtHitsTotal">Transposition-table hits so far.</param>
+/// <param name="CutoffsTotal">Alpha-beta cutoffs so far.</param>
+/// <param name="ElapsedTimestampTicks">Stopwatch ticks from the start of the search to the end of this level.</param>
+public readonly record struct LevelProgress(int Depth, double Score, int BestInstance, int BestCell, long NodesTotal, long TtHitsTotal,
+    long CutoffsTotal, long ElapsedTimestampTicks);
+
 /// <summary>
 /// Fast search (Phase 4): alpha-beta with an incremental Zobrist key and a bound-aware, fixed-size transposition
 /// table. It is NOT a node-for-node port of Python. Its contract (CSHARP_MIGRATION.md, Phase 4 and Q-5 = option b):
@@ -86,8 +98,11 @@ public sealed class FastSearcher
     /// <paramref name="clearTable"/> has the meaning and the context rule documented on <see cref="RunFixedDepth"/>:
     /// reuse needs the same GameState, the same AI side and the same evaluation mode, otherwise it throws
     /// <see cref="InvalidOperationException"/> without changing anything.
+    /// <paramref name="onLevel"/> (Phase 8A, live progress): called ONCE per completed level, never per node, after the level's
+    /// statistics are recorded. It observes; it cannot change the search. A null callback costs one comparison per level.
     /// </summary>
-    public SearchResult RunIterativeDeepening(int maxDepth, bool aggressive, SearchLimits limits, bool clearTable = true)
+    public SearchResult RunIterativeDeepening(int maxDepth, bool aggressive, SearchLimits limits, bool clearTable = true,
+        Action<LevelProgress>? onLevel = null)
     {
         if ((uint)maxDepth > MaxDepth) throw new ArgumentOutOfRangeException(nameof(maxDepth), maxDepth, $"maxDepth must be 0..{MaxDepth}");
         Begin(limits, aggressive, clearTable);
@@ -118,6 +133,8 @@ public sealed class FastSearcher
                 Stats.LevelEndTimestamp[level] = Stopwatch.GetTimestamp(); // statistics only: once per level
                 Stats.LevelTtHitsTotal[level] = Stats.TtHits;
                 Stats.LevelCutoffsTotal[level] = Stats.AlphaBetaCutoffs;
+                onLevel?.Invoke(new LevelProgress(depth, score, _rootInst, _rootCell, Stats.NodesSearched, Stats.TtHits, Stats.AlphaBetaCutoffs,
+                    Stats.LevelEndTimestamp[level] - Stats.StartTimestamp));
 
                 // Nothing deeper can change the result once the whole tree is covered, or if the root side cannot move.
                 if (_stopped || depth >= empties || _rootInst < 0) break;
