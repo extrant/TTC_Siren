@@ -44,6 +44,24 @@ public sealed class EngineTests : IClassFixture<EngineFixture>
         Assert.True(body["idleWorkers"]!.GetValue<int>() <= 4);
         Assert.Equal(256, body["queueLimit"]!.GetValue<int>());
         Assert.False(string.IsNullOrEmpty(body["version"]!.GetValue<string>()));
+        // the Python client derives its read timeout from the engine's queue wait (A-20 / M7-1), so health must report it
+        Assert.Equal(120_000, body["queueWaitMs"]!.GetValue<int>());
+        Assert.Equal(0, body["abandonedSkipped"]!.GetValue<long>());
+        Assert.True(body["served"]!.GetValue<long>() >= 0);
+        Assert.Equal(System.Runtime.GCSettings.IsServerGC, body["serverGc"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void The_default_queue_settings_fit_an_engine_that_has_no_fallback()
+    {
+        // A-20: a request waits for the engine instead of being answered by Python, so the queue is deep and the wait long.
+        // docs/DEPLOY_WINDOWS.md section 3 documents these defaults.
+        var defaults = new EngineOptions();
+        Assert.Equal(256, defaults.QueueLimit);
+        Assert.Equal(60_000, defaults.QueueWaitMs);
+        var parsed = EngineOptions.Parse(new[] { "--port", "0" });
+        Assert.Equal(256, parsed.QueueLimit);
+        Assert.Equal(60_000, parsed.QueueWaitMs);
     }
 
     // ------------------------------------------------------------------ round trip against the oracle

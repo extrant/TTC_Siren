@@ -197,6 +197,112 @@ public sealed class EngineConcurrencyTests : IClassFixture<EngineFixture>
         }
     }
 
+    // ------------------------------------------------------------------ abandoned requests (review M7-1)
+
+    [Fact]
+    public async Task A_request_whose_caller_has_gone_is_not_given_a_worker()
+    {
+        var pool = new WorkerPool(workers: 1, ttEntries: 1 << 10, memoEntries: 1 << 10, queueLimit: 4, queueWaitMs: 60_000);
+
+        // a worker is free, but the caller left before it arrived: nothing is leased and the permit stays
+        using (var gone = new CancellationTokenSource())
+        {
+            gone.Cancel();
+            var (none, reason) = await pool.AcquireAsync(gone.Token);
+            Assert.Null(none);
+            Assert.Equal(BusyReason.Abandoned, reason);
+        }
+        Assert.Equal(1, pool.Idle);
+        Assert.Equal(0, pool.Created);
+        Assert.Equal(1, pool.AbandonedSkipped);
+        Assert.Equal(0, pool.BusyAnswers);
+
+        // the only worker is busy; a queued caller leaves while it waits: it stops waiting at once
+        var (busy, _) = await pool.AcquireAsync(CancellationToken.None);
+        Assert.NotNull(busy);
+        using var leaves = new CancellationTokenSource();
+        var queued = pool.AcquireAsync(leaves.Token);
+        Assert.Equal(1, pool.Waiting);
+        leaves.Cancel();
+        var (nobody, why) = await queued;
+        Assert.Null(nobody);
+        Assert.Equal(BusyReason.Abandoned, why);
+        Assert.Equal(0, pool.Waiting);
+        Assert.Equal(2, pool.AbandonedSkipped);
+
+        // the abandoned request did not take the worker's place: the next caller gets it as soon as it is released
+        var next = pool.AcquireAsync(CancellationToken.None);
+        pool.Release(busy!);
+        var (served, ok) = await next;
+        Assert.Same(busy, served);
+        Assert.Equal(BusyReason.None, ok);
+        Assert.Equal(1, pool.Served);
+    }
+
+    [Fact]
+    public async Task Queued_requests_that_were_aborted_are_dropped_without_a_search()
+    {
+        var host = EngineHost.Create(new EngineOptions { Port = 0, Workers = 1, QueueLimit = 16, QueueWaitMs = 120_000, TtEntries = 1 << 18, MemoEntries = 1 << 15 });
+        await host.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(host.BaseUrl), Timeout = TimeSpan.FromMinutes(2) };
+        try
+        {
+            async Task<JsonNode> Health() => JsonNode.Parse(await client.GetStringAsync("/v1/health"))!;
+
+            // occupy the only worker with a lease taken in the test: deterministic, no timing assumptions
+            var (lease, _) = await host.Pool.AcquireAsync(CancellationToken.None);
+            Assert.NotNull(lease);
+
+            var request = EngineJson.Request(ReferenceScenarios.Create("open_none", SearchGolden.Db).ToSnapshot(), maxDepth: "9");
+            using var cts = new CancellationTokenSource();
+            var abandoned = Enumerable.Range(0, 3).Select(_ => Task.Run(async () =>
+            {
+                try
+                {
+                    using var content = new StringContent(request, System.Text.Encoding.UTF8, "application/json");
+                    using var response = await client.PostAsync("/v1/solve", content, cts.Token);
+                    return (int)response.StatusCode;
+                }
+                catch (OperationCanceledException)
+                {
+                    return -1;
+                }
+            })).ToArray();
+
+            // all three are queued behind the lease ...
+            for (int i = 0; i < 200 && (int)(await Health())["queued"]!.GetValue<int>() < 3; i++) await Task.Delay(25);
+            Assert.Equal(3, (await Health())["queued"]!.GetValue<int>());
+
+            // ... and their callers hang up (HttpClient closes the connection)
+            cts.Cancel();
+            Assert.All(await Task.WhenAll(abandoned), status => Assert.Equal(-1, status));
+            JsonNode health = await Health();
+            for (int i = 0; i < 200 && health["abandonedSkipped"]!.GetValue<long>() < 3; i++)
+            {
+                await Task.Delay(25);
+                health = await Health();
+            }
+            Assert.Equal(3, health["abandonedSkipped"]!.GetValue<long>());
+            Assert.Equal(0, health["queued"]!.GetValue<int>());
+            Assert.Equal(0, health["busyAnswers"]!.GetValue<long>());
+
+            // the worker is released: nothing was searched for the abandoned requests, and the next request is served at once
+            host.Pool.Release(lease!);
+            Assert.Equal(1, (await Health())["served"]!.GetValue<long>()); // the test's own lease only
+            var (status, body) = await EngineJson.Post(client, EngineJson.Request(ReferenceScenarios.Create("end5_same_plus", SearchGolden.Db).ToSnapshot()));
+            Assert.Equal(200, status);
+            Assert.Equal("ok", body["status"]!.GetValue<string>());
+            health = await Health();
+            Assert.Equal(2, health["served"]!.GetValue<long>());
+            Assert.Equal(1, health["workersCreated"]!.GetValue<int>());
+        }
+        finally
+        {
+            await host.StopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
     [Fact]
     public async Task The_worker_pool_is_bounded_and_creates_contexts_lazily()
     {

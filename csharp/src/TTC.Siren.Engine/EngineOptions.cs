@@ -5,7 +5,7 @@ namespace TTC.Siren.Engine;
 
 /// <summary>
 /// Engine configuration. Sources, later ones win: defaults, <c>appsettings.json</c> (section "Engine"), the command line.
-/// Command line: <c>--port 5300 --workers 12 --queue 64 --queue-wait-ms 30000 --card-db path --tt-entries 4194304
+/// Command line: <c>--port 5300 --workers 12 --queue 256 --queue-wait-ms 60000 --card-db path --tt-entries 4194304
 /// --memo-entries 32768 --host 127.0.0.1</c>, and the flag <c>--allow-remote</c>.
 /// </summary>
 public sealed class EngineOptions
@@ -21,11 +21,17 @@ public sealed class EngineOptions
     /// <summary>Number of worker contexts = searches that run at the same time.</summary>
     public int Workers { get; set; } = Environment.ProcessorCount;
 
-    /// <summary>Requests that may wait for a worker; further requests are answered "busy" at once.</summary>
-    public int QueueLimit { get; set; } = 64;
+    /// <summary>
+    /// Requests that may wait for a worker; further requests are answered "busy" (HTTP 503) at once. The Python server no longer falls
+    /// back to its own solver (A-20), so a request waits for the engine instead: the queue is deep.
+    /// </summary>
+    public int QueueLimit { get; set; } = 256;
 
-    /// <summary>How long a queued request waits for a worker before it is answered "busy".</summary>
-    public int QueueWaitMs { get; set; } = 30_000;
+    /// <summary>
+    /// How long a queued request waits for a worker before it is answered "busy". Reported by <c>/v1/health</c>: the Python client's
+    /// read timeout is <c>max_time</c> + this + a margin, so a queued request is always answered by the engine, never by a client timeout.
+    /// </summary>
+    public int QueueWaitMs { get; set; } = 60_000;
 
     /// <summary>The card database CSV. Null: <c>data/幻卡数据库.csv</c> found above the application directory.</summary>
     public string? CardDbPath { get; set; }

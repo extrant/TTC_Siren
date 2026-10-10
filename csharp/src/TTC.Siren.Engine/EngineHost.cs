@@ -104,7 +104,11 @@ public sealed class EngineHost
                 w.WriteNumber("idleWorkers", pool.Idle);
                 w.WriteNumber("queued", pool.Waiting);
                 w.WriteNumber("queueLimit", pool.QueueLimit);
+                w.WriteNumber("queueWaitMs", pool.QueueWaitMs);
                 w.WriteNumber("busyAnswers", pool.BusyAnswers);
+                w.WriteNumber("abandonedSkipped", pool.AbandonedSkipped);
+                w.WriteNumber("served", pool.Served);
+                w.WriteBoolean("serverGc", System.Runtime.GCSettings.IsServerGC);
                 w.WriteNumber("tableMemoryBytes", pool.MemoryBytes);
                 w.WriteNumber("uptimeSeconds", Stopwatch.GetElapsedTime(started).TotalSeconds);
                 w.WriteEndObject();
@@ -140,6 +144,8 @@ public sealed class EngineHost
             var (worker, reason) = await pool.AcquireAsync(ct).ConfigureAwait(false);
             if (worker is null)
             {
+                if (reason == BusyReason.Abandoned)
+                    return Json(503, ResponseWriter.Error("busy", "the request was aborted before a worker became free", "aborted")); // nobody is listening
                 return Json(503, ResponseWriter.Error("busy", "all workers are busy",
                     reason == BusyReason.QueueFull ? "queue_full" : "queue_timeout"));
             }
