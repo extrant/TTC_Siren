@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.e2e.json --noEmit",
     "build": "npm run data && npm run typecheck && vite build",
     "test": "node scripts/build-cards.mjs && vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "report": "playwright test -c playwright.reports.config.ts"
   },
   "dependencies": {
     "@react-three/fiber": "9.8.1",

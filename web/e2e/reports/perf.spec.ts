@@ -3,11 +3,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from '@playwright/test'
 
-// Frame rate of the table while a replay plays with its animations. On demand: PERF=1 npx playwright test e2e/perf.spec.ts
+// Frame rate of the table while a replay plays with its animations. On demand: npm run report
 // The headless browser draws WebGL in software (SwiftShader), so these numbers are a floor, not what a GPU gives.
 
-test.skip(process.env.PERF !== '1', 'on demand: PERF=1')
-const out = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'reports', 'phase8b')
+const out = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'docs', 'reports', 'phase8b')
 
 async function measure(page: import('@playwright/test').Page, ms: number) {
   return page.evaluate(async (duration) => {

@@ -8,6 +8,7 @@ const channel = process.env.E2E_CHANNEL === undefined ? 'msedge' : process.env.E
 
 export default defineConfig({
   testDir: 'e2e',
+  testIgnore: '**/reports/**', // the screenshots and the frame rate of the report are made on demand (playwright.reports.config.ts)
   globalSetup: './e2e/global-setup.ts',
   fullyParallel: false,
   workers: 1,

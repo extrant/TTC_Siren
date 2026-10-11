@@ -3,16 +3,15 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test, type Page } from '@playwright/test'
 import sharp from 'sharp'
-import { authFile, freshGameId, postGame } from './helpers'
+import { authFile, freshGameId, postGame } from '../helpers'
 
 // The screenshots of the report (docs/reports/phase8b/screenshots): every page, in both languages, with the 3D table and with the flat one. Run on demand:
-//   SCREENSHOTS=1 npx playwright test e2e/screenshots.spec.ts
+//   npm run report
 // Animations are off (reduced motion) so that every picture shows the settled table; the PNGs are palette-quantised to stay small.
 
 const here = dirname(fileURLToPath(import.meta.url))
-const out = join(here, '..', '..', 'docs', 'reports', 'phase8b', 'screenshots')
+const out = join(here, '..', '..', '..', 'docs', 'reports', 'phase8b', 'screenshots')
 
-test.skip(process.env.SCREENSHOTS !== '1', 'on demand: SCREENSHOTS=1')
 test.use({ storageState: authFile, viewport: { width: 1180, height: 760 } })
 
 const gameId = freshGameId('shots')
