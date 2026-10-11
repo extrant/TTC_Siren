@@ -1,6 +1,8 @@
-# Game log schema — version 1
+# Game log schema — version 2
 
-Status: implemented in Phase 8A (`csharp/src/TTC.Siren.Server/GameLog`). The schema version is the field `v` of every record; a change of meaning of any field bumps it.
+Status: implemented in Phase 8A (version 1) and changed in Phase 8B (version 2; `csharp/src/TTC.Siren.Server/GameLog`). The schema version is the field `v` of every record; a change of meaning of any field bumps it.
+
+**Version 2 (Phase 8B, review L8-2 and L8-4):** (1) integers are written as integers (`"max_depth": 4`, `"card_id": 357`; version 1 wrote some of them as `4.0`); (2) `request_raw` is the request as it was received — its members in the sender's order, every number written the way the sender wrote it (`4`, `4.0`, `1E1`), only the white space between tokens is removed (a compact body comes back byte for byte); (3) `opponent_move` has `ambiguous` and `candidate_ids` (see there). Files of version 1 are still read: a game written by version 1 may continue in version 2, so one file can hold records of both (every record carries its own `v`; the games API reports the highest as `schema`).
 
 ## 1. Storage
 
@@ -12,16 +14,16 @@ Status: implemented in Phase 8A (`csharp/src/TTC.Siren.Server/GameLog`). The sch
 
 ## 2. Common fields
 
-Every record: `v` (1), `seq` (0, 1, 2 … without gaps), `type`, `t` (UTC, `yyyy-MM-ddTHH:mm:ss.fffZ`), `elapsed_ms` (since the game started).
+Every record: `v` (2; 1 in files written before Phase 8B), `seq` (0, 1, 2 … without gaps), `type`, `t` (UTC, `yyyy-MM-ddTHH:mm:ss.fffZ`), `elapsed_ms` (since the game started).
 
 ## 3. Records
 
 ### `game_start` (first record)
-`game_id`; `id_source` (`client` = the request carried `gameId`, `new` = a game the server started, `inferred` is recorded on the request, see below); `key_id`; `rules` (list), `rules_text` (as sent), `open_mode`; `my_owner` (`red`/`blue`: the plugin user's colour); `npc_name`, `npc_ids`; `known_decks` (`mine`, `opponent`: card ids visible in the hands of the first request); `server`; `schema` (1).
+`game_id`; `id_source` (`client` = the request carried `gameId`, `new` = a game the server started, `inferred` is recorded on the request, see below); `key_id`; `rules` (list), `rules_text` (as sent), `open_mode`; `my_owner` (`red`/`blue`: the plugin user's colour); `npc_name`, `npc_ids`; `known_decks` (`mine`, `opponent`: card ids visible in the hands of the first request); `server`; `schema` (2).
 
 ### `request`
 - `request_no` (1-based within the game); `seed` (string; the 64-bit seed of the unknown-card sampling, fresh and cryptographic in production); `settings` (`max_depth`, `max_time` as sent, `aggressive`, `solver`, `explain`, `show_search_progress`, `tt_entries`).
-- `request_raw`: the plugin's request exactly as sent. With `seed` this is all a decision depends on.
+- `request_raw`: the plugin's request as received (version 2: tokens exactly as written, white space between tokens removed). With `seed` this is all a decision depends on.
 - `rules`; `state`: the position before the search in the engine form `{cur, board[9], hands[2], generated[2]}` (a card is `[id|null, type|null, "r"|"b"|null, modifier, base u,r,d,l, display u,r,d,l, canUse]`; `generated` marks the hand cards that are assumed cards for unknown slots). The state is what the server searched: hands in request order, unknown slots already filled with assumed cards.
 - `id_inference`: why this request was attached to the game (`consistent successor`, `same position (repeated request)`) or null.
 - `http_status`, `error` (null on success).
@@ -30,7 +32,9 @@ Every record: `v` (1), `seq` (0, 1, 2 … without gaps), `type`, `t` (UTC, `yyyy
 
 ### `opponent_move` (inferred)
 Written when a request follows an earlier request of the same game: the difference of the two positions, recomputed by the rules.
-`between` (`[previous request_no, request_no]`); `consistent` (true when the board of the new request equals the board the rules predict after the user's move and the opponent's card; false: the flips below are only the owner changes, without causes, and `note` says why); `card_id`, `card_edges`, `row`, `col`, `owner` (colour of the opponent); `flips` (`row`, `col`, `card_id`, `cause`: `basic`, `reverse`, `fallen_ace`, `same`, `plus`, `combo`); `my_move` (`row`, `col`, `as_recommended`) or null; `new_cells`; `note`.
+`between` (`[previous request_no, request_no]`); `consistent` (true when the board of the new request equals the board the rules predict after the user's move and the opponent's card; false: the flips below are only the owner changes, without causes, and `note` says why); `card_id`, `card_edges`, `row`, `col`, `owner` (colour of the opponent); `ambiguous` and `candidate_ids` (version 2, see below); `flips` (`row`, `col`, `card_id`, `cause`: `basic`, `reverse`, `fallen_ace`, `same`, `plus`, `combo`); `my_move` (`row`, `col`, `as_recommended`) or null; `new_cells`; `note`.
+
+**Ambiguous cards (L8-4).** A request names a card by its four edges (the plugin sends no card id), so a card inferred between two requests is only known up to its edges. When more than one database card has these four edges — the review's example is ids 12 and 369 — the record has `"ambiguous": true` and `candidate_ids` lists all of them in database order; `card_id` is the first one, as Python's `find_card_id_by_stats` would choose. `ambiguous` is `false` and `candidate_ids` holds the single id for a unique card, and `[]` when no card could be identified. The type of the cards can differ (the request carries none), so the type-dependent rules (同类强化 / 同类弱化) may differ between the candidates; a UI should show `card_edges`, with the ids only as candidates. The same holds for the cards inside `state` and `flips`, whose ids come from the same lookup.
 
 ### `game_end`
 `source` (`observed`: a request arrived with a full board; `own_last_move`: the move just recommended fills the board); `final` (`mine`, `theirs`: cards on the board plus cards left in hands, as the rules count); `winner` (`mine`/`theirs`/`draw`); `board`.

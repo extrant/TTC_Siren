@@ -320,12 +320,9 @@ public sealed class ServerHost
                 if (!GameLogStore.GameIdPattern.IsMatch(id)) return Error(400, "invalid game id");
                 var lines = store.ReadLines(auth.KeyId, id);
                 if (lines.Count == 0) return Error(404, "game not found");
-                var records = lines.Select(line =>
-                {
-                    using var d = JsonDocument.Parse(line);
-                    return JsonConv.ToObject(d.RootElement);
-                }).ToList();
-                return new JsonTextResult(200, PyJson.Serialize(new Dictionary<string, object?> { ["game_id"] = id, ["schema"] = 1, ["records"] = records }));
+                // the log's own lines, as they were written (review L8-2): numbers keep their form, nothing is parsed and written again
+                var records = lines.Select(line => (object?)new RawJson(line)).ToList();
+                return new JsonTextResult(200, PyJson.Serialize(new Dictionary<string, object?> { ["game_id"] = id, ["schema"] = SchemaOf(lines), ["records"] = records }));
             }
         });
 
@@ -396,6 +393,18 @@ public sealed class ServerHost
 
         self = new ServerHost(app, options, ai, pool, sha, gameLog, keys);
         return self;
+    }
+
+    /// <summary>The highest schema version in the lines of a game (files written before Phase 8B hold version 1; a game may continue in version 2).</summary>
+    private static int SchemaOf(List<string> lines)
+    {
+        int version = 1;
+        foreach (string line in lines)
+        {
+            using var d = JsonDocument.Parse(line);
+            if (d.RootElement.TryGetProperty("v", out var v) && v.TryGetInt32(out int n)) version = Math.Max(version, n);
+        }
+        return version;
     }
 
     private static JsonTextResult Error(int status, string message) => new(status, PyJson.Serialize(new Dictionary<string, object?> { ["error"] = message }));

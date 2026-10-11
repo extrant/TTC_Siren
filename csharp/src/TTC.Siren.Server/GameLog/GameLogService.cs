@@ -35,8 +35,11 @@ public static class JsonConv
             case JsonValueKind.True: return true;
             case JsonValueKind.False: return false;
             case JsonValueKind.Number:
+                // review L8-2: an if statement, not `cond ? l : e.GetDouble()` -- that expression has the type double, so every integer was boxed as a double
+                // and written as 357.0
                 string raw = e.GetRawText();
-                return !raw.Contains('.') && !raw.Contains('e') && !raw.Contains('E') && e.TryGetInt64(out long l) ? l : e.GetDouble();
+                if (!raw.Contains('.') && !raw.Contains('e') && !raw.Contains('E') && e.TryGetInt64(out long l)) return l;
+                return e.GetDouble();
             default: return null;
         }
     }
@@ -95,6 +98,12 @@ public static class JsonConv
 /// </summary>
 public sealed class GameLogService
 {
+    /// <summary>
+    /// The schema version written into every record (<c>v</c>). Version 2 (Phase 8B): integers are written as integers, <c>request_raw</c> is the request as it was
+    /// received, and an inferred opponent card carries <c>ambiguous</c> and <c>candidate_ids</c>. Files of version 1 are still read.
+    /// </summary>
+    public const int SchemaVersion = 2;
+
     internal sealed class ActiveGame
     {
         public required string Id;
@@ -113,12 +122,14 @@ public sealed class GameLogService
     private readonly CardDb _db;
     private readonly ConcurrentDictionary<string, Dictionary<string, ActiveGame>> _active = new();
     private readonly string _serverVersion;
+    private readonly CardCandidates _candidates;
 
     public GameLogService(GameLogStore store, LiveHub hub, CardDb db, string serverVersion, TimeProvider? time = null)
     {
         _store = store;
         _hub = hub;
         _db = db;
+        _candidates = new CardCandidates(db);
         _serverVersion = serverVersion;
         _time = time ?? TimeProvider.System;
     }
@@ -321,7 +332,7 @@ public sealed class GameLogService
     {
         var d = new Dictionary<string, object?>
         {
-            ["v"] = 1, ["seq"] = game.Seq++, ["type"] = type, ["t"] = JsonConv.Utc(at), ["elapsed_ms"] = Math.Round((at - game.Started).TotalMilliseconds, 0),
+            ["v"] = SchemaVersion, ["seq"] = game.Seq++, ["type"] = type, ["t"] = JsonConv.Utc(at), ["elapsed_ms"] = (long)Math.Round((at - game.Started).TotalMilliseconds, 0),
         };
         return d;
     }
@@ -426,7 +437,7 @@ public sealed class GameLogService
         List<object?> Known(int player) => snapshot.Hands[player].Where((c, i) => !(i < generated[player].Length && generated[player][i]) && c.Id > 0 && c.Id < 1000).Select(c => (object?)c.Id).ToList();
         rec["known_decks"] = new Dictionary<string, object?> { ["mine"] = Known(me), ["opponent"] = Known(1 - me) };
         rec["server"] = _serverVersion;
-        rec["schema"] = 1;
+        rec["schema"] = SchemaVersion;
         Write(keyId, game, rec);
     }
 
@@ -439,6 +450,11 @@ public sealed class GameLogService
         rec["consistent"] = inf.Consistent;
         rec["card_id"] = inf.OpponentCardId == 0 ? null : inf.OpponentCardId;
         rec["card_edges"] = inf.OpponentEdges.Length == 0 ? null : inf.OpponentEdges.Cast<object?>().ToList();
+        // review L8-4: a request carries edges, not a card id. Several database cards can share the four edges; card_id is the first (as Python's
+        // find_card_id_by_stats would pick), and the log says honestly that the card is one of candidate_ids
+        var candidates = inf.OpponentEdges.Length == 4 ? _candidates.IdsWithEdges(inf.OpponentEdges[0], inf.OpponentEdges[1], inf.OpponentEdges[2], inf.OpponentEdges[3]) : new List<int>();
+        rec["ambiguous"] = candidates.Count > 1;
+        rec["candidate_ids"] = candidates.Cast<object?>().ToList();
         rec["row"] = inf.OpponentCell < 0 ? null : inf.OpponentCell / 3;
         rec["col"] = inf.OpponentCell < 0 ? null : inf.OpponentCell % 3;
         rec["owner"] = inf.OpponentOwner;
@@ -468,7 +484,7 @@ public sealed class GameLogService
             ["show_search_progress"] = outcome.Parsed.ShowSearchProgress,
             ["tt_entries"] = outcome.TtEntries,
         };
-        rec["request_raw"] = JsonConv.ToObject(raw);
+        rec["request_raw"] = RawJson.Compact(rawRequest); // the request as received: its numbers and members exactly as the plugin wrote them (review L8-2)
         rec["rules"] = outcome.Parsed.Rules;
         rec["state"] = JsonConv.State(info.State, info.Generated);
         rec["id_inference"] = inferenceNote;
@@ -544,4 +560,30 @@ public sealed class GameLogService
         g.MakeMove(new Move(inst, move.Value.Row * 3 + move.Value.Col));
         return g.ToSnapshot();
     }
+}
+
+/// <summary>
+/// The database cards that share four edges (review L8-4). The plugin's request names a card by its edges only, so a card inferred from two requests is one
+/// of these; the all-zero placeholder rows are never candidates.
+/// </summary>
+public sealed class CardCandidates
+{
+    private readonly Dictionary<uint, List<int>> _byEdges = new();
+
+    public CardCandidates(CardDb db)
+    {
+        foreach (var c in db.Cards)
+        {
+            if (c.Up == 0 && c.Right == 0 && c.Down == 0 && c.Left == 0) continue;
+            uint key = Key(c.Up, c.Right, c.Down, c.Left);
+            if (!_byEdges.TryGetValue(key, out var list)) _byEdges[key] = list = new List<int>();
+            list.Add(c.Id);
+        }
+    }
+
+    private static uint Key(int up, int right, int down, int left) => (uint)up | (uint)right << 8 | (uint)down << 16 | (uint)left << 24;
+
+    /// <summary>The ids of the cards with these edges, in database order (the first is the one Python's lookup returns). Empty when none.</summary>
+    public List<int> IdsWithEdges(int up, int right, int down, int left) =>
+        _byEdges.TryGetValue(Key(up, right, down, left), out var list) ? new List<int>(list) : new List<int>();
 }

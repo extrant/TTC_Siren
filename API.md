@@ -563,6 +563,8 @@ HTTP 状态码：
 
 `GET /v1/games?offset=&limit=`（列表）、`GET /v1/games/{id}`（JSON：全部记录）、`GET /v1/games/{id}/download`（JSON Lines 下载）、`DELETE /v1/games/{id}`。每个密钥只能看到自己的对局（别人的对局返回 404）。记录格式见 `docs/design/GAME_LOG_SCHEMA.md`；默认保留 30 天。
 
+**Phase 8B（日志格式版本 2）：** 整数永远写成整数（`4` 而不是 `4.0`）；`request_raw` 是服务器收到的请求原文（成员顺序、数字写法都保持原样，只去掉词法单元之间的空白），所以紧凑的请求体下载回来逐字节相同；`GET /v1/games/{id}` 返回的就是日志文件的各行，不再重新序列化，`schema` 是其中最高的 `v`（版本 1 的旧文件照常读取）。推断出的对手牌（`opponent_move`）多了 `ambiguous` 与 `candidate_ids`：请求里只有四条边没有卡 id，数据库中边相同的卡不止一张时 `ambiguous` 为 `true`，`candidate_ids` 列出全部候选（按数据库顺序），`card_id` 是其中第一张（与 Python 的 `find_card_id_by_stats` 一致）；界面应显示 `card_edges` 而不是只显示 id。
+
 ### 5.3 实时事件流
 
 `GET /v1/live[?game_id=<id>]`，Server-Sent Events，只推送该密钥自己的事件：`request.received`（收到请求，含局面）、`search.depth`（每完成一层：深度、评分、最佳走法、节点数、用时）、`robust.progress`（残局信息集开始/结束）、`decision`（走法与简要解释）、`game.updated`（写入日志的记录）、`game.ended`。落后的客户端会丢弃最旧的事件并收到 `lagged` 通知（含丢弃数量），服务器不会因慢客户端而变慢。每 15 秒有一条心跳注释。

@@ -1,8 +1,64 @@
 using System.Collections;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 
 namespace TTC.Siren.Compat;
+
+/// <summary>
+/// JSON text that <see cref="PyJson"/> writes as it is: a value the caller already holds in its final form (for example a line of a game log that must reach
+/// the client with its numbers exactly as they were written, review L8-2).
+/// </summary>
+public sealed record RawJson(string Text)
+{
+    /// <summary>
+    /// The same JSON without the whitespace between tokens: every token keeps the exact text it had in the input (a number written <c>4.0</c> stays <c>4.0</c>,
+    /// <c>4</c> stays <c>4</c>, a string keeps its escapes) and the members keep their order. A request body that was already compact comes back byte for byte.
+    /// </summary>
+    public static RawJson Compact(string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { MaxDepth = 64 });
+        var sb = new StringBuilder(bytes.Length);
+        bool comma = false;
+        while (reader.Read())
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.StartObject:
+                case JsonTokenType.StartArray:
+                    if (comma) sb.Append(',');
+                    sb.Append(reader.TokenType == JsonTokenType.StartObject ? '{' : '[');
+                    comma = false;
+                    break;
+                case JsonTokenType.EndObject:
+                case JsonTokenType.EndArray:
+                    sb.Append(reader.TokenType == JsonTokenType.EndObject ? '}' : ']');
+                    comma = true;
+                    break;
+                case JsonTokenType.PropertyName:
+                    if (comma) sb.Append(',');
+                    sb.Append('"').Append(Encoding.UTF8.GetString(reader.ValueSpan)).Append("\":");
+                    comma = false;
+                    break;
+                case JsonTokenType.String:
+                    if (comma) sb.Append(',');
+                    sb.Append('"').Append(Encoding.UTF8.GetString(reader.ValueSpan)).Append('"');
+                    comma = true;
+                    break;
+                case JsonTokenType.Number:
+                case JsonTokenType.True:
+                case JsonTokenType.False:
+                case JsonTokenType.Null:
+                    if (comma) sb.Append(',');
+                    sb.Append(Encoding.UTF8.GetString(reader.ValueSpan));
+                    comma = true;
+                    break;
+            }
+        }
+        return new RawJson(sb.ToString());
+    }
+}
 
 /// <summary>
 /// Writes response objects the way Flask's <c>jsonify</c> does: compact separators, keys sorted, floats as Python's <c>repr</c> (a
@@ -24,6 +80,7 @@ public static class PyJson
         switch (value)
         {
             case null: sb.Append("null"); break;
+            case RawJson raw: sb.Append(raw.Text); break;
             case bool b: sb.Append(b ? "true" : "false"); break;
             case int i: sb.Append(i.ToString(CultureInfo.InvariantCulture)); break;
             case long l: sb.Append(l.ToString(CultureInfo.InvariantCulture)); break;

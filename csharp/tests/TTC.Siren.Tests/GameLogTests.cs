@@ -140,7 +140,7 @@ public sealed class GameLogTests : IDisposable
                 Assert.Equal(sim.User == 0 ? "red" : "blue", records[0].GetProperty("my_owner").GetString());
                 var times = records.Select(r => DateTimeOffset.Parse(r.GetProperty("t").GetString()!)).ToList();
                 Assert.True(times.Zip(times.Skip(1), (a, b) => a <= b).All(x => x));
-                Assert.All(records, r => Assert.Equal(1, r.GetProperty("v").GetInt32()));
+                Assert.All(records, r => Assert.Equal(GameLogService.SchemaVersion, r.GetProperty("v").GetInt32())); // 2 since Phase 8B (L8-2)
 
                 // ---- the requests: one per turn of the user
                 var requestRecords = records.Where(r => r.GetProperty("type").GetString() == "request").ToList();
@@ -372,7 +372,7 @@ public sealed class GameLogTests : IDisposable
         var (_, json) = await Call(HttpMethod.Get, "/v1/games/" + gameA, "alice");
         using (var doc = JsonDocument.Parse(json))
         {
-            Assert.Equal(1, doc.RootElement.GetProperty("schema").GetInt32());
+            Assert.Equal(GameLogService.SchemaVersion, doc.RootElement.GetProperty("schema").GetInt32()); // 2 since Phase 8B (L8-2)
             Assert.Equal("game_start", doc.RootElement.GetProperty("records")[0].GetProperty("type").GetString());
         }
         var (ds, jsonl) = await Call(HttpMethod.Get, "/v1/games/" + gameA + "/download", "alice");
