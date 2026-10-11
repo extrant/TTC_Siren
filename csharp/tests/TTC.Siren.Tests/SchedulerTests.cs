@@ -1,8 +1,6 @@
-using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using TTC.Siren.Compat;
-using TTC.Siren.Core;
 using TTC.Siren.Engine;
 using TTC.Siren.Server;
 using Xunit.Abstractions;
@@ -10,9 +8,27 @@ using Xunit.Abstractions;
 namespace TTC.Siren.Tests;
 
 /// <summary>
+/// A clock that moves only when a test moves it (one tick = one millisecond). With it the aging of the wait queue is exercised on logical time:
+/// what a test asserts is the ORDER in which requests are served, never how long anything took on the machine that runs the test (review M8-2).
+/// </summary>
+internal sealed class LogicalClock : TimeProvider
+{
+    private long _ms;
+
+    public override long TimestampFrequency => 1000;
+
+    public override long GetTimestamp() => Interlocked.Read(ref _ms);
+
+    public void Advance(long milliseconds) => Interlocked.Add(ref _ms, milliseconds);
+}
+
+/// <summary>
 /// Review O8-1: the wait queue is ordered by the estimated cost of a request, with aging. Cheap requests (endgames, the robust endgame) overtake
 /// openings; an opening that has waited long enough is as good as a cheap request and then goes by arrival, so it cannot be overtaken for ever.
-/// The first tests pin the rules on the pool alone; the last reproduces the review's probe (one worker, twelve openings, then five cheap requests).
+/// The first tests pin the rules on the pool alone, on a logical clock; the last reproduces the review's probe (one worker, twelve openings, then
+/// five cheap requests) through the real service, with the order of service read from the pool's grant numbers.
+/// Nothing here depends on how fast the machine is: a request is queued by a call that has registered it before it returns, the aging clock is
+/// logical, and each assertion is about who was served before whom.
 /// </summary>
 public sealed class SchedulerTests
 {
@@ -20,127 +36,146 @@ public sealed class SchedulerTests
 
     public SchedulerTests(ITestOutputHelper output) => _output = output;
 
-    private static WorkerPool Pool(int agingMs = 60_000, int queue = 64) => new(workers: 1, ttEntries: 1 << 8, memoEntries: 1 << 8, queueLimit: queue, queueWaitMs: 60_000, agingMs);
+    private static WorkerPool Pool(LogicalClock clock, int agingMs = 60_000, int queue = 64) =>
+        new(workers: 1, ttEntries: 1 << 8, memoEntries: 1 << 8, queueLimit: queue, queueWaitMs: 60_000, agingMs, clock);
 
-    /// <summary>Queues a request of the given class and returns the order in which it is served (appended to <paramref name="served"/>).</summary>
-    private static Task<AcquireResult> Queue(WorkerPool pool, int rank, string name, List<string> served)
+    /// <summary>
+    /// Queues a request. <c>AcquireAsync</c> runs up to its first wait synchronously, so when this returns the request is in the queue
+    /// (<see cref="WorkerPool.Waiting"/> has grown): arrival order is exactly the order of these calls.
+    /// </summary>
+    private static Task<AcquireResult> Queue(WorkerPool pool, int rank)
     {
+        int before = pool.Waiting;
         var task = pool.AcquireAsync(CancellationToken.None, rank);
-        return task.ContinueWith(t =>
+        Assert.Equal(before + 1, pool.Waiting);
+        return task;
+    }
+
+    /// <summary>Serves every pending request, one after the other, and returns the names in the order of service.</summary>
+    private static async Task<List<string>> Drain(WorkerPool pool, Dictionary<string, Task<AcquireResult>> pending)
+    {
+        var served = new List<string>();
+        while (pending.Count > 0)
         {
-            lock (served) served.Add(name);
-            pool.Release(t.Result.Worker!);
-            return t.Result;
-        });
-    }
-
-    private static async Task WaitUntilQueued(WorkerPool pool, int count)
-    {
-        for (int i = 0; i < 500 && pool.Waiting < count; i++) await Task.Delay(5);
-        Assert.Equal(count, pool.Waiting);
-    }
-
-    private static async Task WaitUntilQueuedAtLeast(WorkerPool pool, int count)
-    {
-        for (int i = 0; i < 1000 && pool.Waiting < count; i++) await Task.Delay(5);
-        Assert.True(pool.Waiting >= count, $"only {pool.Waiting} requests are waiting");
+            var all = pending.ToDictionary(kv => kv.Value, kv => kv.Key);
+            var done = await Task.WhenAny(pending.Values);
+            string name = all[done];
+            pending.Remove(name);
+            served.Add(name);
+            pool.Release((await done).Worker!);
+        }
+        return served;
     }
 
     [Fact]
     public async Task Requests_of_one_class_are_served_first_come_first_served()
     {
-        var pool = Pool();
+        var pool = Pool(new LogicalClock());
         var running = (await pool.AcquireAsync(CancellationToken.None, RequestClass.Medium)).Worker!;
-        var served = new List<string>();
-        var tasks = new List<Task>();
-        for (int i = 0; i < 6; i++)
-        {
-            tasks.Add(Queue(pool, RequestClass.Expensive, "e" + i, served));
-            await WaitUntilQueued(pool, i + 1);
-        }
+        var pending = new Dictionary<string, Task<AcquireResult>>();
+        for (int i = 0; i < 6; i++) pending["e" + i] = Queue(pool, RequestClass.Expensive);
         pool.Release(running);
-        await Task.WhenAll(tasks);
-        Assert.Equal(new[] { "e0", "e1", "e2", "e3", "e4", "e5" }, served);
+        Assert.Equal(new[] { "e0", "e1", "e2", "e3", "e4", "e5" }, await Drain(pool, pending));
+    }
+
+    [Fact]
+    public async Task Grant_numbers_are_the_order_of_service()
+    {
+        var pool = Pool(new LogicalClock());
+        var first = await pool.AcquireAsync(CancellationToken.None, RequestClass.Medium);
+        Assert.Equal(1, first.Grant);
+        var a = Queue(pool, RequestClass.Expensive);
+        var b = Queue(pool, RequestClass.Cheap);
+        pool.Release(first.Worker!);
+        var order = await Drain(pool, new Dictionary<string, Task<AcquireResult>> { ["a"] = a, ["b"] = b });
+        Assert.Equal(new[] { "b", "a" }, order);
+        Assert.Equal(2, (await b).Grant);
+        Assert.Equal(3, (await a).Grant);
     }
 
     [Fact]
     public async Task A_cheap_request_overtakes_the_openings_that_were_queued_before_it()
     {
-        var pool = Pool();
+        var pool = Pool(new LogicalClock());
         var running = (await pool.AcquireAsync(CancellationToken.None, RequestClass.Expensive)).Worker!;
-        var served = new List<string>();
-        var tasks = new List<Task>();
-        for (int i = 0; i < 4; i++)
-        {
-            tasks.Add(Queue(pool, RequestClass.Expensive, "opening" + i, served));
-            await WaitUntilQueued(pool, i + 1);
-        }
-        tasks.Add(Queue(pool, RequestClass.Cheap, "cheap-a", served));
-        await WaitUntilQueued(pool, 5);
-        tasks.Add(Queue(pool, RequestClass.Medium, "medium", served));
-        await WaitUntilQueued(pool, 6);
-        tasks.Add(Queue(pool, RequestClass.Cheap, "cheap-b", served));
-        await WaitUntilQueued(pool, 7);
+        var pending = new Dictionary<string, Task<AcquireResult>>();
+        for (int i = 0; i < 4; i++) pending["opening" + i] = Queue(pool, RequestClass.Expensive);
+        pending["cheap-a"] = Queue(pool, RequestClass.Cheap);
+        pending["medium"] = Queue(pool, RequestClass.Medium);
+        pending["cheap-b"] = Queue(pool, RequestClass.Cheap);
         pool.Release(running);
-        await Task.WhenAll(tasks);
         // cheap before medium before the openings, each class first come first served
-        Assert.Equal(new[] { "cheap-a", "cheap-b", "medium", "opening0", "opening1", "opening2", "opening3" }, served);
+        Assert.Equal(new[] { "cheap-a", "cheap-b", "medium", "opening0", "opening1", "opening2", "opening3" }, await Drain(pool, pending));
     }
 
-    [Fact]
-    public async Task An_opening_that_has_waited_long_enough_is_no_longer_overtaken_by_later_cheap_requests()
+    [Theory]
+    [InlineData(0, "late-cheap")]
+    [InlineData(99, "late-cheap")]
+    [InlineData(100, "late-cheap")] // one aging period: the opening counts as medium, which a cheap request still overtakes
+    [InlineData(199, "late-cheap")]
+    [InlineData(200, "old-opening")] // two aging periods: as good as a cheap request, and it arrived first
+    [InlineData(250, "old-opening")]
+    [InlineData(5000, "old-opening")]
+    public async Task An_opening_is_overtaken_by_a_later_cheap_request_only_until_it_has_waited_two_aging_periods(int waitedMs, string firstServed)
     {
-        var pool = Pool(agingMs: 80);
+        var clock = new LogicalClock();
+        var pool = Pool(clock, agingMs: 100);
         var running = (await pool.AcquireAsync(CancellationToken.None, RequestClass.Expensive)).Worker!;
-        var served = new List<string>();
-        var tasks = new List<Task> { Queue(pool, RequestClass.Expensive, "old-opening", served) };
-        await WaitUntilQueued(pool, 1);
-        await Task.Delay(250); // more than two aging periods: the opening now counts as cheap, and it arrived first
-        tasks.Add(Queue(pool, RequestClass.Cheap, "late-cheap", served));
-        await WaitUntilQueued(pool, 2);
+        var pending = new Dictionary<string, Task<AcquireResult>> { ["old-opening"] = Queue(pool, RequestClass.Expensive) };
+        clock.Advance(waitedMs);
+        pending["late-cheap"] = Queue(pool, RequestClass.Cheap);
         pool.Release(running);
-        await Task.WhenAll(tasks);
-        Assert.Equal(new[] { "old-opening", "late-cheap" }, served);
+        var order = await Drain(pool, pending);
+        Assert.Equal(firstServed, order[0]);
+        Assert.Equal(2, order.Count);
+    }
+
+    [Theory]
+    [InlineData(99, "late-cheap")]
+    [InlineData(100, "medium")] // one aging period: a medium request has become cheap, and it arrived first
+    [InlineData(101, "medium")]
+    public async Task A_medium_request_ages_into_the_cheap_class_after_one_aging_period(int waitedMs, string firstServed)
+    {
+        var clock = new LogicalClock();
+        var pool = Pool(clock, agingMs: 100);
+        var running = (await pool.AcquireAsync(CancellationToken.None, RequestClass.Expensive)).Worker!;
+        var pending = new Dictionary<string, Task<AcquireResult>> { ["medium"] = Queue(pool, RequestClass.Medium) };
+        clock.Advance(waitedMs);
+        pending["late-cheap"] = Queue(pool, RequestClass.Cheap);
+        pool.Release(running);
+        Assert.Equal(firstServed, (await Drain(pool, pending))[0]);
     }
 
     [Fact]
-    public async Task An_opening_waits_at_most_twice_the_aging_period_for_requests_that_arrive_after_it_even_under_a_constant_stream_of_cheap_ones()
+    public async Task Under_a_constant_stream_of_cheap_requests_an_opening_is_overtaken_for_exactly_two_aging_periods()
     {
-        const int aging = 100;
-        var pool = Pool(agingMs: aging, queue: 1000);
-        var running = (await pool.AcquireAsync(CancellationToken.None, RequestClass.Medium)).Worker!;
-        var order = new List<string>();
-        var opening = Queue(pool, RequestClass.Expensive, "opening", order);
-        await WaitUntilQueued(pool, 1);
-        var sw = Stopwatch.StartNew();
-        // a cheap request every 10 ms for 600 ms; each takes 20 ms of "work" (one worker): the stream alone would keep the worker busy for ever
-        var stream = Task.Run(async () =>
+        const int aging = 100, step = 10;
+        var clock = new LogicalClock();
+        var pool = Pool(clock, agingMs: aging, queue: 1000);
+        var holder = await pool.AcquireAsync(CancellationToken.None, RequestClass.Medium);
+        var opening = Queue(pool, RequestClass.Expensive);
+
+        // every 10 logical ms one cheap request arrives and the worker that is running finishes: the stream alone would keep the single worker busy for ever
+        int cheapServed = 0;
+        var worker = holder.Worker!;
+        Task<AcquireResult> cheap;
+        while (true)
         {
-            var tasks = new List<Task>();
-            for (int i = 0; i < 60; i++)
-            {
-                tasks.Add(Task.Run(async () =>
-                {
-                    var r = await pool.AcquireAsync(CancellationToken.None, RequestClass.Cheap);
-                    lock (order) order.Add("cheap");
-                    await Task.Delay(20);
-                    pool.Release(r.Worker!);
-                }));
-                await Task.Delay(10);
-            }
-            await Task.WhenAll(tasks);
-        });
-        await WaitUntilQueuedAtLeast(pool, 3); // the opening and two cheap requests are waiting: the next grant is a real choice
-        pool.Release(running);
-        var result = await opening;
-        double waited = result.WaitedMs;
-        await stream;
-        int cheapBefore;
-        lock (order) cheapBefore = order.IndexOf("opening");
-        _output.WriteLine($"the opening waited {waited:F0} ms (aging {aging} ms) and was served after {cheapBefore} cheap requests");
-        // after 2 * aging it counts as cheap and, having arrived first, goes first: the wait is bounded (generous margin for a loaded machine)
-        Assert.True(waited < 2 * aging + 400, $"the opening waited {waited} ms");
-        Assert.True(cheapBefore >= 1, "the cheap requests did overtake it at first");
+            cheap = Queue(pool, RequestClass.Cheap);
+            clock.Advance(step);
+            pool.Release(worker);
+            var winner = await Task.WhenAny(opening, cheap);
+            if (ReferenceEquals(winner, opening)) break;
+            cheapServed++;
+            worker = (await cheap).Worker!;
+        }
+        // releases happen at 10, 20, ... ms: the ones at 10 ... 190 serve a cheap request, the one at 200 = 2 * aging serves the opening
+        var served = await opening;
+        _output.WriteLine($"the opening was served after {cheapServed} cheap requests, having waited {served.WaitedMs} logical ms (aging {aging} ms)");
+        Assert.Equal(2 * aging / step - 1, cheapServed);
+        Assert.Equal(2 * aging, served.WaitedMs);
+        pool.Release(served.Worker!);
+        pool.Release((await cheap).Worker!); // the cheap request that arrived with it comes next
     }
 
     // =============================================================================================================== the probe of the review
@@ -158,44 +193,45 @@ public sealed class SchedulerTests
         return JsonDocument.Parse(node.ToJsonString()).RootElement.Clone();
     }
 
-    private static async Task<(List<double> OpeningDone, List<double> CheapDone, List<double> OpeningWait, List<double> CheapWait, int Ok)> Probe(bool priority, List<JsonElement> cheap)
+    private static async Task WaitFor(Func<bool> condition, string what)
     {
-        var service = AiMoveParityTests.CreateService(workers: 1);
+        // a hang detector, not a performance assertion: the condition becomes true as soon as the thread pool has run the request up to the queue
+        var deadline = DateTime.UtcNow.AddSeconds(120);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("never happened: " + what);
+            await Task.Delay(2);
+        }
+    }
+
+    /// <summary>
+    /// One worker is held by a blocker (it stands for the opening that was already running), 12 openings and then the 5 cheap requests are queued
+    /// in that arrival order, and the blocker is released. The order of service is returned (the labels sorted by the grant number of their request).
+    /// </summary>
+    private static async Task<List<string>> Probe(bool priority, List<JsonElement> cheap)
+    {
+        var service = AiMoveParityTests.CreateService(out var pool, workers: 1, time: new LogicalClock()); // a frozen clock: no aging, only the classes
         service.PriorityScheduling = priority;
-        var sw = Stopwatch.StartNew();
-        var openingDone = new double[12];
-        var openingWait = new double[12];
-        var cheapDone = new double[cheap.Count];
-        var cheapWait = new double[cheap.Count];
-        int ok = 0;
+        var blocker = await pool.AcquireAsync(CancellationToken.None, RequestClass.Expensive);
+        Assert.Equal(0, pool.Idle);
+
+        var outcomes = new ConcurrentDictionary<string, AiMoveOutcome>();
         var tasks = new List<Task>();
-        for (int i = 0; i < 12; i++)
+        int queued = 0;
+        async Task Submit(string label, JsonElement request, ulong seed)
         {
-            int n = i;
-            tasks.Add(Task.Run(async () =>
-            {
-                var o = await service.HandleAsync(Opening("opening-" + n, 300), (ulong)(100 + n), CancellationToken.None);
-                openingDone[n] = sw.Elapsed.TotalMilliseconds;
-                openingWait[n] = o.QueueWaitMs;
-                if (o.Status == 200) Interlocked.Increment(ref ok);
-            }));
-            await Task.Delay(5);
+            tasks.Add(Task.Run(async () => outcomes[label] = await service.HandleAsync(request, seed, CancellationToken.None)));
+            queued++;
+            await WaitFor(() => pool.Waiting == queued, label + " reaching the queue");
         }
-        await Task.Delay(100); // the openings are queued behind the first one
-        for (int i = 0; i < cheap.Count; i++)
-        {
-            int n = i;
-            tasks.Add(Task.Run(async () =>
-            {
-                var o = await service.HandleAsync(cheap[n], (ulong)(500 + n), CancellationToken.None);
-                cheapDone[n] = sw.Elapsed.TotalMilliseconds;
-                cheapWait[n] = o.QueueWaitMs;
-                if (o.Status == 200) Interlocked.Increment(ref ok);
-            }));
-            await Task.Delay(5);
-        }
+        for (int i = 0; i < 12; i++) await Submit("opening-" + i, Opening("opening-" + i, 200), (ulong)(100 + i));
+        for (int i = 0; i < cheap.Count; i++) await Submit("cheap-" + i, cheap[i], (ulong)(500 + i));
+
+        pool.Release(blocker.Worker!);
         await Task.WhenAll(tasks);
-        return (openingDone.ToList(), cheapDone.ToList(), openingWait.ToList(), cheapWait.ToList(), ok);
+        Assert.All(outcomes.Values, o => Assert.Equal(200, o.Status));
+        Assert.Equal(12 + cheap.Count, outcomes.Count);
+        return outcomes.OrderBy(kv => kv.Value.PoolGrant).Select(kv => kv.Key).ToList();
     }
 
     [Fact]
@@ -216,23 +252,17 @@ public sealed class SchedulerTests
         }
         Assert.Equal(5, cheap.Count);
 
+        var openings = Enumerable.Range(0, 12).Select(i => "opening-" + i).ToArray();
+        var cheapLabels = Enumerable.Range(0, 5).Select(i => "cheap-" + i).ToArray();
+
         var fifo = await Probe(priority: false, cheap);
         var scheduled = await Probe(priority: true, cheap);
+        _output.WriteLine("first come first served: " + string.Join(" ", fifo));
+        _output.WriteLine("priority with aging    : " + string.Join(" ", scheduled));
 
-        string Line(string name, (List<double> OpeningDone, List<double> CheapDone, List<double> OpeningWait, List<double> CheapWait, int Ok) r) =>
-            $"{name}: cheap requests answered after {r.CheapDone.Min():F0}..{r.CheapDone.Max():F0} ms (queue wait {r.CheapWait.Average():F0} ms on average), " +
-            $"openings after {r.OpeningDone.Min():F0}..{r.OpeningDone.Max():F0} ms (longest queue wait {r.OpeningWait.Max():F0} ms), {r.Ok}/17 answered";
-        _output.WriteLine(Line("first come first served ", fifo));
-        _output.WriteLine(Line("priority with aging      ", scheduled));
-
-        // everything is answered, in both modes
-        Assert.Equal(17, fifo.Ok);
-        Assert.Equal(17, scheduled.Ok);
-        // old behaviour: the cheap requests are stuck behind the openings; new: they are answered while the openings still queue
-        Assert.True(fifo.CheapDone.Min() > fifo.OpeningDone.OrderBy(x => x).ElementAt(8), "FIFO: the cheap requests wait for most openings");
-        Assert.True(scheduled.CheapDone.Max() < scheduled.OpeningDone.OrderBy(x => x).ElementAt(3), "scheduled: the cheap requests are answered while the openings queue");
-        Assert.True(scheduled.CheapWait.Max() < fifo.CheapWait.Min() / 2);
-        // no opening starves: the longest wait is about what the work in front of it takes (12 x 300 ms + the cheap requests), plus slack
-        Assert.True(scheduled.OpeningWait.Max() < 12 * 300 + 5 * 150 + 2500, $"the longest opening wait was {scheduled.OpeningWait.Max()} ms");
+        // old behaviour: every request waits for the ones that came first, so the cheap requests are stuck behind all twelve openings
+        Assert.Equal(openings.Concat(cheapLabels), fifo);
+        // new: the five cheap requests are served first, then the openings, which keep their arrival order (none is starved or reordered)
+        Assert.Equal(cheapLabels.Concat(openings), scheduled);
     }
 }

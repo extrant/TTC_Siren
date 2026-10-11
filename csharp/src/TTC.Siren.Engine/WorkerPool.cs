@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using TTC.Siren.Search;
 
 namespace TTC.Siren.Engine;
@@ -51,8 +50,11 @@ public static class RequestClass
         robustEndgame || emptyCells <= 5 ? Cheap : emptyCells <= 7 ? Medium : Expensive;
 }
 
-/// <summary>The outcome of waiting for a worker.</summary>
-public readonly record struct AcquireResult(WorkerContext? Worker, BusyReason Reason, double WaitedMs);
+/// <summary>
+/// The outcome of waiting for a worker. <see cref="Grant"/> numbers the grants of the pool in the order in which workers were handed out
+/// (1, 2, 3 ...; 0 when nothing was granted): it is the service order, which tests assert instead of measuring wall-clock times.
+/// </summary>
+public readonly record struct AcquireResult(WorkerContext? Worker, BusyReason Reason, double WaitedMs, long Grant = 0);
 
 /// <summary>
 /// A fixed number of worker contexts and a bounded wait queue: at most <c>workers</c> searches run at once, at most
@@ -75,6 +77,7 @@ public sealed class WorkerPool
         public required int Rank;
         public required long Seq;
         public required long ArrivedTimestamp;
+        public long Grant;
         public readonly TaskCompletionSource Granted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool IsGranted;
     }
@@ -89,10 +92,15 @@ public sealed class WorkerPool
     private long _busyAnswers;
     private long _abandoned;
     private long _served;
+    private long _grants;
+    private readonly TimeProvider _time;
 
-    public WorkerPool(int workers, int ttEntries, int memoEntries, int queueLimit, int queueWaitMs, int agingMs = 2000)
+    /// <param name="time">The clock that measures how long a request has waited (aging, <see cref="AcquireResult.WaitedMs"/>). Tests pass a logical clock, so the
+    /// scheduling rules are asserted on the order of service and not on how fast the machine happens to be (review M8-2). The queue-wait timeout is real time.</param>
+    public WorkerPool(int workers, int ttEntries, int memoEntries, int queueLimit, int queueWaitMs, int agingMs = 2000, TimeProvider? time = null)
     {
         if (agingMs < 1) throw new ArgumentOutOfRangeException(nameof(agingMs));
+        _time = time ?? TimeProvider.System;
         _workers = workers;
         _ttEntries = ttEntries;
         _memoEntries = memoEntries;
@@ -149,13 +157,15 @@ public sealed class WorkerPool
     /// </summary>
     public async Task<AcquireResult> AcquireAsync(CancellationToken ct, int requestClass)
     {
-        long arrived = Stopwatch.GetTimestamp();
+        long arrived = _time.GetTimestamp();
         Waiter? waiter = null;
+        long immediateGrant = 0;
         lock (_lock)
         {
             if (_freePermits > 0)
             {
                 _freePermits--;
+                immediateGrant = ++_grants;
             }
             else if (_queue.Count >= _queueLimit)
             {
@@ -185,10 +195,10 @@ public sealed class WorkerPool
                         if (e is TimeoutException)
                         {
                             Interlocked.Increment(ref _busyAnswers);
-                            return new AcquireResult(null, BusyReason.QueueTimeout, Stopwatch.GetElapsedTime(arrived).TotalMilliseconds);
+                            return new AcquireResult(null, BusyReason.QueueTimeout, _time.GetElapsedTime(arrived).TotalMilliseconds);
                         }
                         Interlocked.Increment(ref _abandoned);
-                        return new AcquireResult(null, BusyReason.Abandoned, Stopwatch.GetElapsedTime(arrived).TotalMilliseconds);
+                        return new AcquireResult(null, BusyReason.Abandoned, _time.GetElapsedTime(arrived).TotalMilliseconds);
                     }
                 }
                 // granted at the very moment the wait ended: a timed-out caller simply takes the worker; a cancelled one gives it back
@@ -196,7 +206,7 @@ public sealed class WorkerPool
                 {
                     Interlocked.Increment(ref _abandoned);
                     GiveBack();
-                    return new AcquireResult(null, BusyReason.Abandoned, Stopwatch.GetElapsedTime(arrived).TotalMilliseconds);
+                    return new AcquireResult(null, BusyReason.Abandoned, _time.GetElapsedTime(arrived).TotalMilliseconds);
                 }
             }
         }
@@ -206,15 +216,16 @@ public sealed class WorkerPool
             // the caller left while it waited and a worker has just become free (or was free all along): give the permit back
             Interlocked.Increment(ref _abandoned);
             GiveBack();
-            return new AcquireResult(null, BusyReason.Abandoned, Stopwatch.GetElapsedTime(arrived).TotalMilliseconds);
+            return new AcquireResult(null, BusyReason.Abandoned, _time.GetElapsedTime(arrived).TotalMilliseconds);
         }
 
-        double waited = Stopwatch.GetElapsedTime(arrived).TotalMilliseconds;
-        if (_idle.TryDequeue(out var worker)) return new AcquireResult(worker, BusyReason.None, waited);
+        double waited = _time.GetElapsedTime(arrived).TotalMilliseconds;
+        long grant = waiter?.Grant ?? immediateGrant;
+        if (_idle.TryDequeue(out var worker)) return new AcquireResult(worker, BusyReason.None, waited, grant);
         int id = Interlocked.Increment(ref _created) - 1; // the permit guarantees id < workers
         try
         {
-            return new AcquireResult(new WorkerContext(id, _ttEntries, _memoEntries), BusyReason.None, waited);
+            return new AcquireResult(new WorkerContext(id, _ttEntries, _memoEntries), BusyReason.None, waited, grant);
         }
         catch
         {
@@ -242,7 +253,7 @@ public sealed class WorkerPool
                 _freePermits++;
                 return;
             }
-            long now = Stopwatch.GetTimestamp();
+            long now = _time.GetTimestamp();
             Waiter best = _queue[0];
             int bestRank = Effective(best, now);
             for (int i = 1; i < _queue.Count; i++)
@@ -257,13 +268,14 @@ public sealed class WorkerPool
             }
             _queue.Remove(best);
             best.IsGranted = true;
+            best.Grant = ++_grants;
             best.Granted.SetResult();
         }
     }
 
     private int Effective(Waiter w, long now)
     {
-        long waitedMs = (long)Stopwatch.GetElapsedTime(w.ArrivedTimestamp, now).TotalMilliseconds;
+        long waitedMs = (long)_time.GetElapsedTime(w.ArrivedTimestamp, now).TotalMilliseconds;
         return Math.Max(RequestClass.Cheap, w.Rank - (int)Math.Min(waitedMs / _agingMs, RequestClass.Expensive));
     }
 }

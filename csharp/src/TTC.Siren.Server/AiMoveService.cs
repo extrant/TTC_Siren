@@ -27,6 +27,9 @@ public sealed class AiMoveOutcome
     public double QueueWaitMs;
     public int RequestClass;
 
+    /// <summary>The number of the worker grant this request got from the pool (1, 2, 3 ... in the order the pool served requests; 0: none).</summary>
+    public long PoolGrant;
+
     /// <summary>The "generated unknown card" flag of every hand card at parse time (before the analysis reorders the hands), per player, in request order.</summary>
     public bool[][]? Generated;
     public LMove? Move;
@@ -118,7 +121,7 @@ public sealed class AiMoveService
             outcome.ExplainLevel = explainLevel;
 
             var (result, engineError, solveRequest, facts, explainError, explainMs) =
-                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, observer, ct, (w, c) => { outcome.QueueWaitMs = w; outcome.RequestClass = c; }).ConfigureAwait(false);
+                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, observer, ct, (w, c, g) => { outcome.QueueWaitMs = w; outcome.RequestClass = c; outcome.PoolGrant = g; }).ConfigureAwait(false);
             if (engineError is not null) return Finish(outcome, engineError);
             outcome.Solve = result;
             outcome.Request = solveRequest;
@@ -347,7 +350,7 @@ public sealed class AiMoveService
 
     private async Task<(SolveResult? Result, AiMoveOutcome? Error, SolveRequest? Request, ExplanationFacts? Facts, string? ExplainError, double ExplainMs)> RunEngineAsync(
         RequestParser parser, ParsedRequest req, Num depth, Num time, string explainLevel, IAiMoveObserver? observer, CancellationToken ct,
-        Action<double, int>? onQueued = null)
+        Action<double, int, long>? onQueued = null)
     {
         double queueWaitMs = 0;
         int usedClass = 0;
@@ -385,7 +388,7 @@ public sealed class AiMoveService
                 if (result.Status != SolveResult.Ok) return (null, EngineError("unexpected_status", result.Status, 503), null, null, null, 0);
             }
 
-            onQueued?.Invoke(queueWaitMs, usedClass);
+            onQueued?.Invoke(queueWaitMs, usedClass, acquired.Grant);
 
             // the explanation, while this worker (and the table of the search it just ran) is still ours
             ExplanationFacts? facts = null;

@@ -31,11 +31,14 @@ public class AiMoveParityTests
 
     internal static readonly string[] AdditiveKeys = { "solver_used", "solver_note", "explanation", "game_id" };
 
-    internal static AiMoveService CreateService(int workers = 2, int ttEntries = TtEntries)
+    internal static AiMoveService CreateService(int workers = 2, int ttEntries = TtEntries) => CreateService(out _, workers, ttEntries);
+
+    /// <summary>A service whose worker pool is returned too; <paramref name="time"/> is the clock the pool measures waiting with (a logical clock freezes the aging).</summary>
+    internal static AiMoveService CreateService(out WorkerPool pool, int workers = 2, int ttEntries = TtEntries, TimeProvider? time = null)
     {
         var db = CardDb.LoadFromRepository(AppContext.BaseDirectory);
         var catalog = new CardCatalog(db);
-        var pool = new WorkerPool(workers, ttEntries, 1 << 15, 256, 60_000);
+        pool = new WorkerPool(workers, ttEntries, 1 << 15, 256, 60_000, time: time);
         return new AiMoveService(catalog, new SolveService(db), pool, null, ttEntries);
     }
 

@@ -249,16 +249,19 @@ public sealed class LiveEventTests : IDisposable
     }
 
     [Fact]
-    public void A_slow_consumer_loses_its_oldest_events_never_slows_the_producer_and_is_told_how_many()
+    public async Task A_slow_consumer_loses_its_oldest_events_never_slows_the_producer_and_is_told_how_many()
     {
         var hub = new LiveHub(capacity: 8);
         using var slow = hub.Subscribe("k");      // never reads
         using var other = hub.Subscribe("other"); // another key: sees nothing
-        var sw = Stopwatch.StartNew();
-        for (int i = 1; i <= 20_000; i++) hub.Publish("k", "tick", "g", () => new Dictionary<string, object?> { ["i"] = i });
-        sw.Stop();
-        _output.WriteLine($"20,000 events published to a consumer that never reads in {sw.ElapsedMilliseconds} ms");
-        Assert.True(sw.ElapsedMilliseconds < 2000, $"publishing took {sw.ElapsedMilliseconds} ms");
+        // "the producer is never slowed" is a property of the code, not of the machine: if Publish waited for the consumer, this loop would never end.
+        // The watchdog only turns a hang into a failure; no speed is asserted (review M8-2).
+        var producer = Task.Run(() =>
+        {
+            for (int i = 1; i <= 20_000; i++) hub.Publish("k", "tick", "g", () => new Dictionary<string, object?> { ["i"] = i });
+        });
+        await producer.WaitAsync(TimeSpan.FromSeconds(120));
+        _output.WriteLine("20,000 events published to a consumer that never reads: the producer never blocked");
 
         Assert.Equal(20_000 - 8, slow.TakeDropped());
         Assert.Equal(0, slow.TakeDropped()); // taken once

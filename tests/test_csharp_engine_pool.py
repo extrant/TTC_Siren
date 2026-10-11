@@ -81,7 +81,22 @@ def test_requests_on_short_lived_threads_share_the_pooled_connection(engine, cre
 
 
 def test_more_concurrent_requests_than_the_pool_size_keep_at_most_the_pool_size_afterwards(engine, created):
-    engine.solve = lambda payload: (200, OK, 0.3)
+    # Review M8-2: the burst must really be concurrent. It used to be "every request takes 0.3 s", which on a loaded machine could let the
+    # requests run one after the other (then fewer than five connections were needed). Now every request waits inside the engine until all twelve
+    # have arrived, so twelve connections are open at the same moment, whatever the speed of the machine.
+    burst = 12
+    arrived = [0]
+    lock = threading.Lock()
+    everyone_is_here = threading.Event()
+
+    def hold_until_all_have_arrived(payload):
+        with lock:
+            arrived[0] += 1
+            if arrived[0] == burst:
+                everyone_is_here.set()
+        assert everyone_is_here.wait(60), 'the burst never became concurrent'
+        return 200, OK, 0
+    engine.solve = hold_until_all_have_arrived
     errors = []
 
     def one():
@@ -89,12 +104,13 @@ def test_more_concurrent_requests_than_the_pool_size_keep_at_most_the_pool_size_
             csharp_engine.solve(PAYLOAD, 1)
         except BaseException as e:  # noqa: BLE001
             errors.append(e)
-    threads = [threading.Thread(target=one) for _ in range(12)]
+    threads = [threading.Thread(target=one) for _ in range(burst)]
     for t in threads:
         t.start()
     for t in threads:
-        t.join(30)
+        t.join(90)
     assert errors == []
+    assert engine.accepted >= burst  # every request had its own connection at the same time
     assert engine.accepted > 4  # the burst needed more connections than the pool keeps ...
     assert csharp_engine.pool_idle() == 4  # ... and only the pool size is kept
     open_now = [c for c in created if c.sock is not None]
