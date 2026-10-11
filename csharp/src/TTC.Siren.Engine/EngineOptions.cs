@@ -4,7 +4,9 @@ using Microsoft.Extensions.Configuration;
 namespace TTC.Siren.Engine;
 
 /// <summary>
-/// Engine configuration. Sources, later ones win: defaults, <c>appsettings.json</c> (section "Engine"), the command line.
+/// Engine configuration. Sources, later ones win: defaults, <c>engine.appsettings.json</c> and <c>appsettings.json</c> (section "Engine"), the command line.
+/// The engine's own file is not called <c>appsettings.json</c> on purpose: this project is a library of the product server, and two projects of one
+/// publish output must not both ship a file of that name (review M8-1).
 /// Command line: <c>--port 5300 --workers 12 --queue 256 --queue-wait-ms 60000 --card-db path --tt-entries 4194304
 /// --memo-entries 32768 --host 127.0.0.1</c>, and the flag <c>--allow-remote</c>.
 /// </summary>
@@ -63,6 +65,7 @@ public sealed class EngineOptions
         };
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("engine.appsettings.json", optional: true)
             .AddJsonFile("appsettings.json", optional: true)
             .AddCommandLine(rest, mappings)
             .Build();

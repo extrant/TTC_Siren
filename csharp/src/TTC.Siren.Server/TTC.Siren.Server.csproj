@@ -22,4 +22,14 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
   </ItemGroup>
 
+  <!-- Review M8-1. The Engine project is a library of this server (and a loopback host for the test tools). Its host files must not end up in the
+       server's publish folder: they are not used here, and a second configuration file there would be confusing. The server's own appsettings.json is
+       the only one. (The Engine's own file is called engine.appsettings.json, so the duplicate-output error of NETSDK1152 cannot happen.) -->
+  <Target Name="DropEngineHostFilesFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <_EngineHostFile Include="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == 'engine.appsettings.json' Or '%(ResolvedFileToPublish.RelativePath)' == 'TTC.Siren.Engine.exe' Or '%(ResolvedFileToPublish.RelativePath)' == 'TTC.Siren.Engine.deps.json' Or '%(ResolvedFileToPublish.RelativePath)' == 'TTC.Siren.Engine.runtimeconfig.json'" />
+      <ResolvedFileToPublish Remove="@(_EngineHostFile)" />
+    </ItemGroup>
+  </Target>
+
 </Project>

@@ -31,6 +31,10 @@ Python code changed.
 dotnet publish csharp\src\TTC.Siren.Server -c Release -o publish\server
 ```
 
+The command works as written, without further flags. The output holds one configuration file, the server's own `appsettings.json` (section `Server`, loopback port 5000); the engine library
+is part of the server and its host files are not shipped. (Before Phase 8B the command failed with NETSDK1152 because the engine project also had an `appsettings.json`; the engine's own file is now
+`engine.appsettings.json`, and `PublishTests` publishes and checks the result.)
+
 Copy `publish\server` to the server, for example `C:\ttc\server`, and `data\幻卡数据库.csv` to `C:\ttc\data\`. Never copy golden data, corpora, game logs or key files from a development machine.
 
 ## 3. Configuration
