@@ -40,11 +40,30 @@ public sealed class ServerOptions
     /// </summary>
     public bool TestSeedHeader { get; set; }
 
+    /// <summary>
+    /// The most seconds a request may ask the search to run (<c>max_time</c> is clamped to this; Python's own default is 10). A search is not interrupted by a proxy
+    /// that gave up, so an unbounded <c>max_time</c> would occupy a worker long after the answer could be delivered. 0 switches the cap off (then
+    /// <see cref="OriginTimeoutSeconds"/> must be 0 as well).
+    /// </summary>
+    public double MaxSearchSeconds { get; set; } = 20;
+
+    /// <summary>
+    /// How long the proxy in front of the server (Cloudflare: 100 s on the free plan) waits for an answer; the server answers within this. At start the server checks
+    /// that <see cref="MaxSearchSeconds"/> + the queue wait + <see cref="OriginMarginSeconds"/> stays below it. 0: no proxy with a time limit.
+    /// </summary>
+    public double OriginTimeoutSeconds { get; set; } = 95;
+
+    /// <summary>The time a request needs besides queueing and searching: reading, the explanation, the robust endgame, writing, the network.</summary>
+    public double OriginMarginSeconds { get; set; } = 10;
+
+    /// <summary>The live event stream (<c>Server:Live</c>).</summary>
+    public Live.LiveOptions Live { get; set; } = new();
+
     /// <summary>Game logs (<c>Server:GameLog</c>): directory, retention, game-identity gap.</summary>
     public GameLog.GameLogOptions GameLog { get; set; } = new();
 
     /// <summary>How many live events a subscriber of <c>/v1/live</c> may fall behind before the oldest are dropped (a <c>lagged</c> notice follows).</summary>
-    public int LiveBuffer { get; set; } = Live.LiveHub.DefaultCapacity;
+    public int LiveBuffer { get; set; } = TTC.Siren.Server.Live.LiveHub.DefaultCapacity;
 
     /// <summary>Serve the plain HTTP listener (<see cref="Port"/>). Off with HTTPS only.</summary>
     public bool HttpEnabled { get; set; } = true;
@@ -105,7 +124,7 @@ public sealed class ServerOptions
         if (TestSeedHeader)
         {
             if (!IPAddress.IsLoopback(IPAddress.Parse(Host))) throw new ArgumentException($"TestSeedHeader is a test switch and is refused on {Host}: it is allowed only when the server listens on a loopback address");
-            if (Security.BehindTlsProxy) throw new ArgumentException("TestSeedHeader is a test switch and is refused when the server sits behind a proxy (BehindTlsProxy): the proxy would carry the header from anybody");
+            if (Security.BehindTlsProxy || Security.TrustedProxies.AnyTrusted) throw new ArgumentException("TestSeedHeader is a test switch and is refused when the server sits behind a proxy (BehindTlsProxy or TrustedProxies): the proxy would carry the header from anybody");
         }
 
         if (Workers < 1) throw new ArgumentException("Workers must be at least 1");
@@ -119,6 +138,24 @@ public sealed class ServerOptions
         if (!HttpEnabled && !Security.Https.Enabled) throw new ArgumentException("HttpEnabled=false needs Security:Https:Enabled");
         Security.Validate(Host, IPAddress.IsLoopback(IPAddress.Parse(Host)));
         if (LiveBuffer < 1) throw new ArgumentException("LiveBuffer must be at least 1");
+        Live.Validate();
+        ValidateOriginTimeout();
+    }
+
+    /// <summary>
+    /// Review A-27: a search is not interrupted when the proxy in front gives up, so the worst case of one request -- the wait for a worker, the search at its cap, and the
+    /// time around it -- has to fit into the proxy's timeout. Checked at start; the cap per request is <see cref="MaxSearchSeconds"/>.
+    /// </summary>
+    public void ValidateOriginTimeout()
+    {
+        if (MaxSearchSeconds < 0 || OriginTimeoutSeconds < 0 || OriginMarginSeconds < 0) throw new ArgumentException("MaxSearchSeconds, OriginTimeoutSeconds and OriginMarginSeconds must not be negative");
+        if (OriginTimeoutSeconds == 0) return;
+        if (MaxSearchSeconds == 0) throw new ArgumentException("OriginTimeoutSeconds is set, so MaxSearchSeconds must be set too (a search without a cap cannot be promised to finish in time)");
+        double worst = MaxSearchSeconds + QueueWaitMs / 1000.0 + OriginMarginSeconds;
+        if (worst >= OriginTimeoutSeconds)
+            throw new ArgumentException(
+                $"A request can take {MaxSearchSeconds:0.##} s (MaxSearchSeconds) + {QueueWaitMs / 1000.0:0.##} s (QueueWaitMs) + {OriginMarginSeconds:0.##} s (OriginMarginSeconds) = {worst:0.##} s, " +
+                $"but the proxy in front gives up after {OriginTimeoutSeconds:0.##} s (OriginTimeoutSeconds). Lower MaxSearchSeconds or QueueWaitMs, or raise OriginTimeoutSeconds if the proxy allows it (Cloudflare: 100 s on the free plan).");
     }
 
     public IPAddress Address => IPAddress.Parse(Host);

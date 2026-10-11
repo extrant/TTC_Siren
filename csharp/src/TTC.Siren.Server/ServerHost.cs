@@ -141,10 +141,14 @@ public sealed class ServerHost
 
         var pool = new WorkerPool(options.Workers, options.TtEntries, options.MemoEntries, options.QueueLimit, options.QueueWaitMs, options.AgingMs);
         var templates = options.TemplatesDirectory is { } dir ? TemplateSet.Load(Path.Combine(dir, "explain.zh-CN.json")) : TemplateSet.Default();
-        var ai = new AiMoveService(catalog, new SolveService(db), pool, templates, options.TtEntries) { PriorityScheduling = options.PriorityScheduling };
+        var ai = new AiMoveService(catalog, new SolveService(db), pool, templates, options.TtEntries)
+        {
+            PriorityScheduling = options.PriorityScheduling,
+            Caps = new SearchCaps(MaxSeconds: options.MaxSearchSeconds > 0 ? options.MaxSearchSeconds : null),
+        };
         string version = typeof(ServerHost).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
         var store = new GameLogStore(options.GameLog, time);
-        var hub = new LiveHub(options.LiveBuffer);
+        var hub = new LiveHub(options.LiveBuffer, options.Live.ReplayEvents, TimeSpan.FromMinutes(options.Live.ReplayMinutes), time, options.Live.ReplayBytes);
         var gameLog = new GameLogService(store, hub, db, "TTC.Siren.Server " + version, time);
         builder.Services.AddSingleton(new GameLogCleanup(store));
         builder.Services.AddHostedService(sp => sp.GetRequiredService<GameLogCleanup>());
@@ -166,6 +170,7 @@ public sealed class ServerHost
         }
         else limiter = new KeyLimiter(null, security, time);
         var proxy = options.Proxy.Enabled ? new PythonProxy(options.Proxy) : null;
+        var clientIps = new ClientIpResolver(security.TrustedProxies, AppContext.BaseDirectory); // fails now, not at the first request, when the range file is missing
 
         var app = builder.Build();
         var logger = app.Logger;
@@ -173,10 +178,18 @@ public sealed class ServerHost
         var started = Stopwatch.GetTimestamp();
         var corsOrigins = new HashSet<string>(security.CorsOrigins.Select(o => o.TrimEnd('/')), StringComparer.Ordinal);
 
-        // ---- headers: security headers on every answer, CORS for the configured origins, HSTS over HTTPS
+        // ---- who is the client (real address behind a trusted proxy), then headers: security headers on every answer, no caching of dynamic answers,
+        //      CORS for the configured origins, HSTS over HTTPS
         app.Use(async (ctx, next) =>
         {
+            ctx.Items[HttpItems.ClientIp] = clientIps.Resolve(ctx);
             var headers = ctx.Response.Headers;
+            // Cloudflare caches by file extension unless told not to; a dynamic answer must never be stored (the static files set their own policy below)
+            ctx.Response.OnStarting(() =>
+            {
+                if (!ctx.Response.Headers.ContainsKey("Cache-Control")) ctx.Response.Headers["Cache-Control"] = "no-store";
+                return Task.CompletedTask;
+            });
             headers["X-Content-Type-Options"] = "nosniff";
             headers["Referrer-Policy"] = "no-referrer";
             headers["X-Frame-Options"] = "DENY";
@@ -209,7 +222,14 @@ public sealed class ServerHost
             app.UseStaticFiles(new StaticFileOptions
             {
                 FileProvider = files,
-                OnPrepareResponse = c => c.Context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'",
+                OnPrepareResponse = c =>
+                {
+                    var h = c.Context.Response.Headers;
+                    h["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'";
+                    // files under /assets/ have a content hash in their name (the build writes them so): they never change, cache them for a year;
+                    // everything else (index.html) is revalidated each time, so a new release is picked up
+                    h["Cache-Control"] = c.Context.Request.Path.StartsWithSegments("/assets") ? "public, max-age=31536000, immutable" : "no-cache";
+                },
             });
         }
         else
@@ -365,14 +385,15 @@ public sealed class ServerHost
             using (lease)
             {
                 string? gameFilter = ctx.Request.Query["game_id"].ToString() is { Length: > 0 } g && GameLogStore.GameIdPattern.IsMatch(g) ? g : null;
-                await LiveStream.RunAsync(ctx, hub, auth.KeyId, gameFilter).ConfigureAwait(false);
+                await LiveStream.RunAsync(ctx, hub, auth.KeyId, gameFilter, options.Live.Heartbeat, LiveStream.LastEventId(ctx.Request)).ConfigureAwait(false);
             }
         });
 
         // ---- operator endpoints: loopback only, never through a proxy
+        //      A request that a proxy handled (Cloudflare, a local tunnel, a reverse proxy: any of the proxy headers) is refused even when its TCP peer is the local machine,
+        //      because that is exactly what a tunnel looks like. The operator sits at the machine and sends none of them.
         bool IsOperator(HttpRequest r) =>
-            r.HttpContext.Connection.RemoteIpAddress is { } ip && IPAddress.IsLoopback(ip) &&
-            !r.Headers.ContainsKey("X-Forwarded-For") && !r.Headers.ContainsKey("Forwarded") && !r.Headers.ContainsKey("X-Real-IP");
+            r.HttpContext.Connection.RemoteIpAddress is { } ip && IPAddress.IsLoopback(ip) && !ClientIpResolver.CarriesProxyHeaders(r);
         app.MapGet("/admin/status", (HttpRequest http) =>
         {
             if (!IsOperator(http)) return Error(403, "operator endpoints are reachable from this machine only");
@@ -392,6 +413,9 @@ public sealed class ServerHost
         });
 
         if (options.TestSeedHeader) logger.LogWarning("Server:TestSeedHeader is ON: the X-Ttc-Test-Seed header of a local request fixes the sampling seed. This is a test switch and must never be on in production.");
+        if (security.TrustedProxies.AnyTrusted)
+            logger.LogInformation("Client addresses are read from {Header} for requests from trusted proxies ({Ranges} configured ranges, loopback {Loopback})",
+                security.TrustedProxies.ClientIpHeader, clientIps.RangeCount, security.TrustedProxies.TrustLoopback);
 
         self = new ServerHost(app, options, ai, pool, sha, gameLog, keys);
         return self;
@@ -414,8 +438,8 @@ public sealed class ServerHost
     /// <summary>Production: a fresh 64-bit cryptographic seed per request. The header seed exists for the parity tests only, behind a configuration switch.</summary>
     private static ulong ChooseSeed(ServerOptions options, HttpRequest http)
     {
-        // the header is believed only from a local caller (review L8-1: and only when the switch was allowed at start, which needs a loopback listener)
-        if (options.TestSeedHeader && http.HttpContext.Connection.RemoteIpAddress is { } peer && IPAddress.IsLoopback(peer) &&
+        // the header is believed only from a local caller that no proxy handled (review L8-1: and only when the switch was allowed at start)
+        if (options.TestSeedHeader && http.HttpContext.Connection.RemoteIpAddress is { } peer && IPAddress.IsLoopback(peer) && !ClientIpResolver.CarriesProxyHeaders(http) &&
             http.Headers.TryGetValue("X-Ttc-Test-Seed", out var header) && ulong.TryParse(header.ToString(), out ulong seed)) return seed;
         Span<byte> bytes = stackalloc byte[8];
         RandomNumberGenerator.Fill(bytes);

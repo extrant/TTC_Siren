@@ -9,6 +9,20 @@ using TTC.Siren.Server.GameLog;
 
 namespace TTC.Siren.Server;
 
+/// <summary>
+/// Operating limits on a request's search (not part of the Python behaviour): <c>max_time</c> and <c>max_depth</c> are clamped to these. A search is not
+/// interrupted when the proxy in front gives up, so a request that asks for an unbounded time would occupy a worker for nothing.
+/// </summary>
+public sealed record SearchCaps(double? MaxSeconds = null, int? MaxDepth = null)
+{
+    public static readonly SearchCaps None = new();
+
+    /// <summary>The stricter of two caps.</summary>
+    public SearchCaps Min(SearchCaps other) => new(
+        MaxSeconds is { } a ? (other.MaxSeconds is { } b ? Math.Min(a, b) : a) : other.MaxSeconds,
+        MaxDepth is { } d ? (other.MaxDepth is { } e ? Math.Min(d, e) : d) : other.MaxDepth);
+}
+
 /// <summary>What one <c>/ai_move</c> request produced: the HTTP status, the response object (before serialisation) and what the callers (game log, live events) need.</summary>
 public sealed class AiMoveOutcome
 {
@@ -26,6 +40,9 @@ public sealed class AiMoveOutcome
     /// <summary>Milliseconds the request waited for a worker, and the class (0 cheap, 1 medium, 2 expensive) it was queued in.</summary>
     public double QueueWaitMs;
     public int RequestClass;
+
+    /// <summary>Set when the server lowered the request's <c>max_time</c> or <c>max_depth</c>: what the limits are (reported in <c>engine_info.limits</c>).</summary>
+    public Dictionary<string, object?>? Limits;
 
     /// <summary>The number of the worker grant this request got from the pool (1, 2, 3 ... in the order the pool served requests; 0: none).</summary>
     public long PoolGrant;
@@ -59,6 +76,9 @@ public sealed class AiMoveService
     /// same class so that they cannot be overtaken for ever. Off: every request is queued in the same class, i.e. plain first come first served.
     /// </summary>
     public bool PriorityScheduling { get; set; } = true;
+
+    /// <summary>Limits that apply to every request (the server's cap on <c>max_time</c>); none by default, so that the parity tests see the Python behaviour.</summary>
+    public SearchCaps Caps { get; set; } = SearchCaps.None;
 
     public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool, TemplateSet? templates = null, int ttEntries = 0)
     {
@@ -113,6 +133,21 @@ public sealed class AiMoveService
             // max_depth / max_time as the Python client of the engine reads them (wire_max_depth, wire_max_time)
             if (!ReadNumber(data, "max_depth", 10, out var depthNumber, out string? depthError)) return Finish(outcome, EngineError("unsupported_parameter", depthError!, 400));
             if (!ReadNumber(data, "max_time", 10, out var timeNumber, out string? timeError)) return Finish(outcome, EngineError("unsupported_parameter", timeError!, 400));
+            var caps = Caps;
+            var requestedTime = timeNumber;
+            depthNumber = CapDepth(depthNumber, caps.MaxDepth, out bool depthClamped);
+            timeNumber = CapTime(timeNumber, caps.MaxSeconds, out bool timeClamped);
+            if (depthClamped || timeClamped)
+            {
+                var limits = new Dictionary<string, object?>();
+                if (timeClamped)
+                {
+                    limits["max_time"] = timeNumber.Boxed;
+                    limits["requested_max_time"] = requestedTime.Value is null ? null : requestedTime.Boxed;
+                }
+                if (depthClamped) limits["max_depth"] = depthNumber.Boxed;
+                outcome.Limits = limits;
+            }
             object wireDepth = depthNumber.Value is { } dv && dv > 100 ? 100L : depthNumber.Boxed;
 
             // the request's explain level: "full" asks for the alternatives too; anything else is "brief"
@@ -235,6 +270,7 @@ public sealed class AiMoveService
                     },
                 },
             };
+            if (outcome.Limits is not null) ((Dictionary<string, object?>)body["engine_info"]!)["limits"] = outcome.Limits;
             if (req.ShowSearchProgress && progress.Count > 0)
             {
                 body["search_progress"] = progress;
@@ -346,6 +382,25 @@ public sealed class AiMoveService
                 error = $"{name}={Py.Repr(e)} is not a number";
                 return false;
         }
+    }
+
+    /// <summary>The time limit lowered to <paramref name="cap"/> when the request asked for more, or for no limit at all.</summary>
+    private static Num CapTime(Num time, double? cap, out bool clamped)
+    {
+        clamped = false;
+        if (cap is not { } c) return time;
+        if (time.Value is { } v && !double.IsNaN(v) && v <= c) return time;
+        clamped = true;
+        return c == Math.Floor(c) && c < long.MaxValue ? new Num((long)c, c, true) : new Num(c, c, false);
+    }
+
+    private static Num CapDepth(Num depth, int? cap, out bool clamped)
+    {
+        clamped = false;
+        if (cap is not { } c) return depth;
+        if (depth.Value is { } v && !double.IsNaN(v) && v <= c) return depth;
+        clamped = true;
+        return new Num((long)c, c, true);
     }
 
     private async Task<(SolveResult? Result, AiMoveOutcome? Error, SolveRequest? Request, ExplanationFacts? Facts, string? ExplainError, double ExplainMs)> RunEngineAsync(

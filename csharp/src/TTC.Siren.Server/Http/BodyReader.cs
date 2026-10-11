@@ -4,6 +4,13 @@ using TTC.Siren.Compat;
 
 namespace TTC.Siren.Server;
 
+/// <summary>Keys of <c>HttpContext.Items</c> that the middleware sets.</summary>
+public static class HttpItems
+{
+    /// <summary>The client address after the trusted-proxy rule (an <c>IPAddress</c>).</summary>
+    public const string ClientIp = "ttc.clientIp";
+}
+
 /// <summary>
 /// Reads a request body up to a limit. A body over the limit is answered with 413 in the usual error form (review L8-3).
 /// A body that is only a little too large is read to its end and thrown away first (up to <see cref="DrainBudget"/>): a server that answers while the client is

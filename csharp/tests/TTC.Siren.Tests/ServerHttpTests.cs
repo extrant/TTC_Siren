@@ -29,7 +29,8 @@ public class ServerHttpTests : IDisposable
     {
         var options = new ServerOptions
         {
-            Host = "127.0.0.1", Port = 0, Workers = 2, TtEntries = AiMoveParityTests.TtEntries, TestSeedHeader = testSeedHeader,
+            Host = "127.0.0.1", Port = 0, Workers = 2, TtEntries = AiMoveParityTests.TtEntries, TestSeedHeader = testSeedHeader, MaxSearchSeconds = 0, OriginTimeoutSeconds = 0, // the corpus asks for max_time 10^6: this is a comparison with Python, so no cap
+           
             GameLog = new TTC.Siren.Server.GameLog.GameLogOptions { Directory = LogDir },
             Security = new TTC.Siren.Server.Security.SecurityOptions { RequireKey = false, DefaultBurst = 1000, DefaultRatePerMinute = 100000, DefaultMaxInFlight = 64 },
         };

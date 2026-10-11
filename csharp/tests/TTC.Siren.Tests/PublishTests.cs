@@ -69,6 +69,7 @@ public sealed class PublishTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_out, "TTC.Siren.Engine.dll")), "the engine library is part of the server");
         Assert.True(File.Exists(Path.Combine(_out, "TTC.Siren.Server.dll")));
         Assert.True(File.Exists(Path.Combine(_out, "TTC.Siren.Server.exe")));
+        Assert.True(File.Exists(Path.Combine(_out, "cloudflare-ips.txt")), "the Cloudflare range file is published next to the program");
 
         // the GC choice of Phase 7 hardening (L7-1) is in the published runtime configuration
         using var runtime = JsonDocument.Parse(File.ReadAllText(Path.Combine(_out, "TTC.Siren.Server.runtimeconfig.json")));

@@ -42,14 +42,17 @@ public sealed class TestSeedSwitchTests : ServerTestBase
     }
 
     [Fact]
-    public void The_test_seed_switch_is_refused_behind_a_tls_proxy_even_on_loopback()
+    public void The_test_seed_switch_is_refused_behind_a_proxy_even_on_loopback()
     {
+        // a local tunnel (cloudflared) delivers requests of the whole internet to a loopback listener
+        var viaTunnel = new ServerOptions { Host = "127.0.0.1", TestSeedHeader = true, Security = new SecurityOptions { TrustedProxies = { TrustLoopback = true } } };
+        Assert.Contains("proxy", Assert.Throws<ArgumentException>(() => viaTunnel.Validate()).Message);
         var tls = new ServerOptions { Host = "127.0.0.1", TestSeedHeader = true, Security = new SecurityOptions { BehindTlsProxy = true } };
-        Assert.Contains("proxy", Assert.Throws<ArgumentException>(() => tls.Validate()).Message);
+        Assert.Throws<ArgumentException>(() => tls.Validate());
     }
 
     [Fact]
-    public async Task The_test_seed_switch_logs_a_warning_when_it_is_on()
+    public async Task The_test_seed_switch_logs_a_warning_when_it_is_on_and_the_header_is_ignored_when_a_proxy_handled_the_request()
     {
         var capture = new CapturingLoggerProvider();
         var host = await StartAsync(o => o.TestSeedHeader = true, capture);
@@ -59,7 +62,12 @@ public sealed class TestSeedSwitchTests : ServerTestBase
         host.RequestCompleted += o => seeds.Add(o.Seed);
         using var http = new HttpClient();
         using (var r = await http.SendAsync(Post(host.BaseUrl, Opening, seed: 4242))) Assert.Equal(200, (int)r.StatusCode);
-        Assert.Equal(4242UL, seeds[0]); // from the local machine the header is honoured: that is what the switch is for
+        // the same header, but the request came through a proxy: it is not believed
+        using (var r = await http.SendAsync(Post(host.BaseUrl, Opening.Replace("fixes-1", "fixes-2"), seed: 4242, ("CF-Connecting-IP", "203.0.113.9")))) Assert.Equal(200, (int)r.StatusCode);
+        using (var r = await http.SendAsync(Post(host.BaseUrl, Opening.Replace("fixes-1", "fixes-3"), seed: 4242, ("X-Forwarded-For", "203.0.113.9")))) Assert.Equal(200, (int)r.StatusCode);
+        Assert.Equal(4242UL, seeds[0]);
+        Assert.NotEqual(4242UL, seeds[1]);
+        Assert.NotEqual(4242UL, seeds[2]);
     }
 
     [Fact]

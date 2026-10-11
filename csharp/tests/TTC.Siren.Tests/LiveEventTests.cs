@@ -21,11 +21,12 @@ internal sealed class SseClient : IAsyncDisposable
     private Task? _pump;
     private HttpResponseMessage? _response;
 
-    public static async Task<SseClient> ConnectAsync(string baseUrl, string key, string query = "")
+    public static async Task<SseClient> ConnectAsync(string baseUrl, string key, string query = "", string? lastEventId = null)
     {
         var client = new SseClient();
         var request = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/v1/live" + query);
         request.Headers.Add("X-Test-Key", key);
+        if (lastEventId is not null) request.Headers.Add("Last-Event-ID", lastEventId);
         client._response = await client._http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, client._cts.Token);
         client.Status = (int)client._response.StatusCode;
         if (client.Status == 200) client._pump = Task.Run(client.PumpAsync);

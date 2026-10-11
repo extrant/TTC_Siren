@@ -51,6 +51,13 @@ Settings come from `appsettings.json` (section `Server`), environment variables 
 | `TtEntries`, `MemoEntries` | `4194304`, `32768` | Per worker table sizes (96 MiB + 0.75 MiB). |
 | `CardDbPath` | found above the application | Absolute path of the CSV. Set it explicitly. |
 | `LiveBuffer` | `256` | Events a `/v1/live` client may fall behind before the oldest are dropped. |
+| `Live:HeartbeatSeconds` | `20` | A comment line on every idle event stream this often. Must stay well below Cloudflare's 100 s idle timeout (the server accepts 0.05 to 60). |
+| `Live:ReplayEvents`, `ReplayBytes`, `ReplayMinutes` | `256`, `2097152`, `15` | The most recent events of each key are kept so that a client that reconnects with `Last-Event-ID` gets what it missed (at most this many events and bytes; forgotten after this many idle minutes). `ReplayEvents=0` switches resuming off. |
+| `MaxSearchSeconds` | `20` | The largest `max_time` a request may use (a larger value is lowered and the answer says so in `engine_info.limits`). The plugin's own default is 10. |
+| `OriginTimeoutSeconds`, `OriginMarginSeconds` | `95`, `10` | How long the proxy in front waits (Cloudflare: 100 s on the free plan) and the time a request needs besides queueing and searching. At start the server checks that `MaxSearchSeconds + QueueWaitMs + OriginMarginSeconds` stays **below** `OriginTimeoutSeconds` and refuses to start otherwise, with the numbers. `OriginTimeoutSeconds=0`: no proxy with a time limit. |
+| `Security:TrustedProxies:UseCloudflareRanges` | `false` | Believe `CF-Connecting-IP` from the peers listed in `cloudflare-ips.txt` (next to the program; section 5a). |
+| `Security:TrustedProxies:TrustLoopback` | `false` | Believe the header from this machine: a `cloudflared` tunnel or a reverse proxy that runs here. |
+| `Security:TrustedProxies:Cidrs`, `CidrFile`, `ClientIpHeader` | none, `cloudflare-ips.txt`, `CF-Connecting-IP` | More trusted proxies (CIDRs or addresses), the range file, and the header that carries the client address. |
 | `StaticDirectory` | none | A folder of static files served at `/` (the web UI of Phase 8B). Without it `/` shows the placeholder page. |
 | `TemplatesDirectory` | none | A folder with another `explain.zh-CN.json` (wording of the explanations). |
 | `GameLog:Directory` | `<app>\gamelogs` | Where game logs are written (one folder per key). Set it outside the application folder. |
@@ -107,6 +114,23 @@ let win-acme's scheduled task renew it. The server reads the certificate at star
 
 **Behind IIS / nginx / Caddy:** let the proxy terminate TLS and forward to `http://127.0.0.1:5000`; keep `Host` loopback, or set `Security:BehindTlsProxy=true` for another interface. Forward the `Authorization` header, allow response streaming for `/v1/live`
 (disable response buffering, long read timeout), and do **not** publish `/admin/*`.
+
+## 5a. Cloudflare in front (recommended)
+
+Cloudflare absorbs floods, hides the origin address and terminates the browser's TLS. The server is built for it (decision A-27); what you configure:
+
+1. **DNS:** the record of the site is *proxied* (orange cloud). Nothing else in the zone should point at the origin address.
+2. **TLS between Cloudflare and the server.** Either
+   * SSL/TLS mode **Full (strict)** with a Cloudflare *Origin CA* certificate: create it in the dashboard (SSL/TLS, Origin Server), export a PFX, and use it in `Security:Https` (section 5). Open inbound 443 only from Cloudflare's ranges (`netsh advfirewall firewall add rule name="TTC Siren HTTPS" dir=in action=allow protocol=TCP localport=443 remoteip=<the ranges of cloudflare-ips.txt>`); or
+   * a **`cloudflared` tunnel** that runs on this machine and forwards to `http://127.0.0.1:5000`. Then no port is open at all, the server stays on loopback with HTTP, and `Security:TrustedProxies:TrustLoopback=true`.
+3. **The real client address.** The server believes `CF-Connecting-IP` only when the TCP peer is a trusted proxy: `UseCloudflareRanges=true` (the ranges in `cloudflare-ips.txt`, next to `TTC.Siren.Server.exe`) for a direct connection, or `TrustLoopback=true` for a local tunnel. From every other peer the header is ignored, so a client cannot choose its own address. Rate limits, login throttling and the audit log use this address. `X-Forwarded-For` is never read.
+4. **Cache.** The server sends `Cache-Control: no-store` on every dynamic answer and a year-long `immutable` policy on the hashed files under `/assets/`. Cloudflare does not cache dynamic paths by default; make it explicit with a **Cache Rule**: if the URI path starts with `/ai_move`, `/v1/`, `/api/`, `/health` or `/admin/` then *Bypass cache*. (`/admin/*` must not be published at all, see 6.)
+5. **Timeouts.** Cloudflare gives up after 100 seconds (free plan; error 524). The server finishes inside `OriginTimeoutSeconds` (95): it lowers a request's `max_time` to `MaxSearchSeconds` (20) and refuses to start with settings whose worst case (`MaxSearchSeconds + QueueWaitMs + OriginMarginSeconds`) is not below the timeout. A paid plan with a longer timeout lets you raise these together.
+6. **The event stream** (`/v1/live`, Server-Sent Events) passes through Cloudflare unbuffered. The server sends a heartbeat comment every 20 seconds (`Live:HeartbeatSeconds`), well below the 100 second idle limit, and a browser that loses the connection reconnects after 3 seconds with `Last-Event-ID` and receives what it missed (API.md section 5.3).
+7. **WAF (optional, in the dashboard — the server has no CAPTCHA or bot code):** a rate-limit rule such as `POST /v1/session` 10 per minute per IP, and `/ai_move` a few hundred per minute per IP; *Bot Fight Mode*; a custom rule that blocks the URI path `/admin`.
+8. **Never expose `/admin/*`.** The operator endpoints answer only a caller on this machine that no proxy handled: a request carrying any of `CF-Connecting-IP`, `CF-Ray`, `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `Via` and the other proxy headers is refused with 403 even when it arrives from loopback (that is what a tunnel looks like).
+9. **Refreshing the ranges.** Cloudflare publishes them at <https://www.cloudflare.com/ips-v4> and <https://www.cloudflare.com/ips-v6> and announces changes in advance. A few times a year: `python tools
+efresh_cloudflare_ips.py C:	tc\server\cloudflare-ips.txt`, then restart the service (the file is read at start; a missing or empty file stops the start). A tunnel needs no ranges.
 
 ## 6. Services
 

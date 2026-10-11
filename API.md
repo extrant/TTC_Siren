@@ -558,6 +558,7 @@ HTTP 状态码：
 | 响应 | `explanation` | `{version: 2, level, language, facts: [...], text: {brief, full}}`。`facts` 是可复算的结构化事实（立即效果与翻牌原因、暴露与威胁、对手最强回应、主变例与预期结果、备选走法、残局信息集、未知牌假设、可信度）；`text.brief` 是一两句话，`text.full` 是分段详述，文字只陈述事实里有的内容。字段说明见 `docs/design/EXPLANATION_FACTS.md`。生成失败时改为 `explanation_error`（走法不受影响） |
 | 响应 | `game_id` | 本次请求归属的对局 id |
 | 响应 | `engine_info.timings.explainMs` | 生成解释用时 |
+| 响应 | `engine_info.limits` | **Phase 8B，仅在服务器压低了请求的上限时出现**：`{"max_time": 20, "requested_max_time": 3600}`（和/或 `"max_depth"`）。服务器把 `max_time` 限制在 `Server:MaxSearchSeconds`（默认 20 秒；插件默认的 10 秒不受影响），因为前面的代理（Cloudflare 免费版 100 秒）放弃之后搜索并不会被打断 |
 
 ### 5.2 对局日志
 
@@ -567,7 +568,9 @@ HTTP 状态码：
 
 ### 5.3 实时事件流
 
-`GET /v1/live[?game_id=<id>]`，Server-Sent Events，只推送该密钥自己的事件：`request.received`（收到请求，含局面）、`search.depth`（每完成一层：深度、评分、最佳走法、节点数、用时）、`robust.progress`（残局信息集开始/结束）、`decision`（走法与简要解释）、`game.updated`（写入日志的记录）、`game.ended`。落后的客户端会丢弃最旧的事件并收到 `lagged` 通知（含丢弃数量），服务器不会因慢客户端而变慢。每 15 秒有一条心跳注释。
+`GET /v1/live[?game_id=<id>]`，Server-Sent Events，只推送该密钥自己的事件：`request.received`（收到请求，含局面）、`search.depth`（每完成一层：深度、评分、最佳走法、节点数、用时）、`robust.progress`（残局信息集开始/结束）、`decision`（走法与简要解释）、`game.updated`（写入日志的记录）、`game.ended`。落后的客户端会丢弃最旧的事件并收到 `lagged` 通知（含丢弃数量），服务器不会因慢客户端而变慢。
+
+**Phase 8B（放在 Cloudflare 之后）：** ① 心跳：每 `Server:Live:HeartbeatSeconds`（默认 **20 秒**，必须小于 Cloudflare 的 100 秒空闲超时）发一行 `: heartbeat` 注释；连接开始时发 `retry: 3000`（浏览器 3 秒后重连）。② 事件 `id:` 现在是**每个密钥自己的序号**（1、2、3 …，服务器重启后从 1 重新开始）。③ **断线续传：** 重连时带 `Last-Event-ID: <最后收到的 id>`（浏览器的 EventSource 自动带；不能设请求头的客户端用 `?last_event_id=`），服务器把错过的事件按顺序补发（每个密钥保留最近 `Server:Live:ReplayEvents` 条、不超过 `ReplayBytes`，无人收听 `ReplayMinutes` 分钟后遗忘）。如果有事件已被淘汰，先收到一条 `resync` 事件：`{"type":"resync","reason":"events_lost","missed":n,"replayed":m}`；如果给的 id 比服务器已发出的还大（服务器重启过，或不是本服务器的 id），收到 `{"reason":"stream_restarted"}`——客户端应重新读取状态（`GET /v1/games`）。④ 所有响应带 `Cache-Control: no-store`（流为 `no-store, no-cache`）。
 
 ### 5.4 云端服务器：认证、限流、HTTPS
 

@@ -22,6 +22,12 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Cloudflare's published proxy ranges (A-27). Shipped next to the program so that the operator can refresh the file without a new build:
+         python tools/refresh_cloudflare_ips.py <path of the deployed file>. Used only when Server:Security:TrustedProxies:UseCloudflareRanges is on. -->
+    <Content Include="data\cloudflare-ips.txt" Link="cloudflare-ips.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Review M8-1. The Engine project is a library of this server (and a loopback host for the test tools). Its host files must not end up in the
        server's publish folder: they are not used here, and a second configuration file there would be confusing. The server's own appsettings.json is
        the only one. (The Engine's own file is called engine.appsettings.json, so the duplicate-output error of NETSDK1152 cannot happen.) -->
