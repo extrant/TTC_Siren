@@ -50,15 +50,16 @@ public static class WarmUp
 
     /// <summary>
     /// A plugin request built from the card database: <paramref name="occupied"/> cards on the board (alternating owners), my hand and the opponent's hand filled up
-    /// to nine cards in all; the opponent's cards are unknown (all zero), at most two of them in the endgame so that the robust path runs.
+    /// to nine cards in all; the opponent's cards are unknown (all zero). With five cards on the board two cards are unknown, so that the robust path runs.
     /// </summary>
-    internal static string BuildRequest(CardDb db, int occupied, double maxTimeSeconds, int depth)
+    public static string BuildRequest(CardDb db, int occupied, double maxTimeSeconds, int depth)
     {
         // plain cards of the database with distinct edges, so that nothing depends on which duplicate a lookup returns
         var cards = db.Cards.Where(c => c.Id is >= 1 and <= 400 && c.Up > 0 && c.Star <= 3).GroupBy(c => (c.Up, c.Right, c.Down, c.Left)).Where(g => g.Count() == 1).Select(g => g.First()).Take(24).ToList();
-        int mine = occupied == 0 ? 5 : 2, theirs = occupied == 0 ? 5 : 2;
+        if (occupied is < 0 or > 7 || (occupied > 0 && occupied % 2 == 0)) throw new ArgumentOutOfRangeException(nameof(occupied), "0, or an odd number of cards on the board up to 7");
+        int mine = occupied == 0 ? 5 : (9 - occupied) / 2, theirs = mine;
         int onBoard = occupied;
-        if (occupied > 0 && onBoard + mine + theirs != 9) throw new InvalidOperationException("warm-up position does not add up to nine cards");
+        if (occupied > 0 && onBoard + mine + theirs != 9) throw new InvalidOperationException("the position does not add up to nine cards");
         var buffer = new ArrayBufferWriter<byte>(2048);
         using (var w = new Utf8JsonWriter(buffer))
         {
