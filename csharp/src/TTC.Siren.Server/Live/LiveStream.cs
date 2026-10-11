@@ -19,7 +19,7 @@ public static class LiveStream
         return long.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long id) ? id : null;
     }
 
-    public static async Task RunAsync(HttpContext ctx, LiveHub hub, string keyId, string? gameFilter, TimeSpan? heartbeat = null, long? lastEventId = null)
+    public static async Task RunAsync(HttpContext ctx, LiveHub hub, string keyId, string? gameFilter, TimeSpan? heartbeat = null, long? lastEventId = null, string? language = null)
     {
         var beat = heartbeat ?? Heartbeat;
         var response = ctx.Response;
@@ -66,7 +66,9 @@ public static class LiveStream
                     long lost = subscription.TakeDropped();
                     if (lost > 0)
                         await WriteAsync(response, "event: lagged\ndata: " + PyJson.Serialize(new Dictionary<string, object?> { ["type"] = "lagged", ["dropped"] = lost }) + "\n\n", ct).ConfigureAwait(false);
-                    await WriteAsync(response, $"id: {e.Id}\nevent: {e.Type}\ndata: {e.Json}\n\n", ct).ConfigureAwait(false);
+                    // ?lang=: the text of the explanation in the language the client reads (the events carry every language)
+                    string data = language is null ? e.Json : ExplanationLanguage.RewriteEvent(e.Json, e.Type, language);
+                    await WriteAsync(response, $"id: {e.Id}\nevent: {e.Type}\ndata: {data}\n\n", ct).ConfigureAwait(false);
                 }
             }
         }

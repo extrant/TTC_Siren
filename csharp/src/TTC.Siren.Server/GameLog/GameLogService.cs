@@ -514,7 +514,10 @@ public sealed class GameLogService
             rec["explanation"] = new Dictionary<string, object?>
             {
                 ["version"] = Explain.ExplanationFacts.Version, ["level"] = outcome.ExplainLevel, ["facts"] = outcome.Facts.ToJson(),
+                ["language"] = outcome.Language,
                 ["text"] = new Dictionary<string, object?> { ["brief"] = outcome.Text.Brief, ["full"] = outcome.Text.Full },
+                // the same facts in every language: a replay can be read in either (GET /v1/games/{id}?lang=en picks one)
+                ["texts"] = outcome.Texts?.ToDictionary(kv => kv.Key, kv => (object?)new Dictionary<string, object?> { ["brief"] = kv.Value.Brief, ["full"] = kv.Value.Full }),
             };
         game.Last = info with { Move = final is { } fm ? (fm.Slot, fm.Row, fm.Col) : null, At = at, RequestNo = requestNo };
         Write(keyId, game, rec);
@@ -524,6 +527,7 @@ public sealed class GameLogService
             _hub.Publish(keyId, "decision", game.Id, () => new Dictionary<string, object?>
             {
                 ["request_no"] = requestNo, ["move"] = MoveJson(move), ["brief"] = outcome.Text?.Brief,
+                ["briefs"] = outcome.Texts?.ToDictionary(kv => kv.Key, kv => (object?)kv.Value.Brief),
                 ["depth_reached"] = outcome.Solve!.DepthCompleted, ["nodes"] = outcome.Solve.Nodes,
             });
         }

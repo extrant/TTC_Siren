@@ -34,6 +34,12 @@ public sealed class AiMoveOutcome
     public SolveResult? Solve;
     public ExplanationFacts? Facts;
     public ExplanationText? Text;
+
+    /// <summary>The language of <see cref="Text"/> and of the explanation in the answer (<c>zh-CN</c> or <c>en</c>).</summary>
+    public string Language = TemplateSet.DefaultLanguage;
+
+    /// <summary>The text of the same facts in every language (the game log keeps all of them, so a replay can be read in either).</summary>
+    public Dictionary<string, ExplanationText>? Texts;
     public string? ExplainLevel;
     public int TtEntries;
 
@@ -73,7 +79,7 @@ public sealed class AiMoveService
     private readonly SolveService _solve;
     private readonly WorkerPool _pool;
     private readonly LegacyAnalysis _analysis;
-    private readonly TemplateSet _templates;
+    private readonly TemplateSets _templates;
 
     private readonly int _ttEntries;
 
@@ -89,14 +95,14 @@ public sealed class AiMoveService
     /// <summary>Further limits for an anonymous request (decision A-27): the stricter of these and <see cref="Caps"/> applies. None by default.</summary>
     public SearchCaps AnonymousCaps { get; set; } = SearchCaps.None;
 
-    public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool, TemplateSet? templates = null, int ttEntries = 0)
+    public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool, TemplateSets? templates = null, int ttEntries = 0)
     {
         _ttEntries = ttEntries;
         _catalog = catalog;
         _solve = solve;
         _pool = pool;
         _analysis = new LegacyAnalysis(catalog);
-        _templates = templates ?? TemplateSet.Default();
+        _templates = templates ?? TemplateSets.Default();
     }
 
     public CardCatalog Catalog => _catalog;
@@ -121,7 +127,7 @@ public sealed class AiMoveService
     /// Handles one request. <paramref name="seed"/> seeds the unknown-card sampling (<see cref="PythonRandom"/>): production passes a fresh
     /// cryptographic seed and logs it, tests pass the seed Python was seeded with.
     /// </summary>
-    public async Task<AiMoveOutcome> HandleAsync(JsonElement data, ulong seed, CancellationToken ct, IAiMoveObserver? observer = null, AccessClass access = AccessClass.Plugin)
+    public async Task<AiMoveOutcome> HandleAsync(JsonElement data, ulong seed, CancellationToken ct, IAiMoveObserver? observer = null, AccessClass access = AccessClass.Plugin, string? language = null)
     {
         var outcome = new AiMoveOutcome { Seed = seed, TtEntries = _ttEntries, Access = access };
         try
@@ -164,6 +170,10 @@ public sealed class AiMoveService
             string explainLevel = data.TryGetProperty("explain", out var explainValue) && explainValue.ValueKind == JsonValueKind.String &&
                                   explainValue.GetString() == "full" ? "full" : "brief";
             outcome.ExplainLevel = explainLevel;
+            // the language of the explanation: the caller's choice (?lang=), else the body's "lang", else Chinese; a tag we have no templates for is ignored
+            outcome.Language = TemplateSet.Normalise(language)
+                               ?? (data.TryGetProperty("lang", out var langValue) && langValue.ValueKind == JsonValueKind.String ? TemplateSet.Normalise(langValue.GetString()) : null)
+                               ?? TemplateSet.DefaultLanguage;
 
             var (result, engineError, solveRequest, facts, explainError, explainMs) =
                 await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, observer, ct, access, (w, c, g) => { outcome.QueueWaitMs = w; outcome.RequestClass = c; outcome.PoolGrant = g; }).ConfigureAwait(false);
@@ -294,12 +304,13 @@ public sealed class AiMoveService
                 try
                 {
                     outcome.Facts = facts;
-                    outcome.Text = ExplanationRenderer.Render(facts, _templates);
+                    outcome.Texts = _templates.RenderAll(facts);
+                    outcome.Text = outcome.Texts[outcome.Language];
                     body["explanation"] = new Dictionary<string, object?>
                     {
                         ["version"] = ExplanationFacts.Version,
                         ["level"] = explainLevel,
-                        ["language"] = _templates.Language,
+                        ["language"] = outcome.Language,
                         ["facts"] = facts.ToJson(),
                         ["text"] = new Dictionary<string, object?> { ["brief"] = outcome.Text.Brief, ["full"] = outcome.Text.Full },
                     };

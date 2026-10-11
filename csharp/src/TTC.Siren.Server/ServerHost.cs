@@ -153,7 +153,7 @@ public sealed class ServerHost
 
         var pool = new WorkerPool(options.Workers, options.TtEntries, options.MemoEntries, options.QueueLimit, options.QueueWaitMs, options.AgingMs,
             capacity: options.Access.CapacityFor(options.Workers));
-        var templates = options.TemplatesDirectory is { } dir ? TemplateSet.Load(Path.Combine(dir, "explain.zh-CN.json")) : TemplateSet.Default();
+        var templates = options.TemplatesDirectory is { } dir ? TemplateSets.FromDirectory(dir) : TemplateSets.Default();
         var ai = new AiMoveService(catalog, new SolveService(db), pool, templates, options.TtEntries)
         {
             PriorityScheduling = options.PriorityScheduling,
@@ -338,7 +338,7 @@ public sealed class ServerHost
                 using (doc)
                 {
                     var session = gameLog.StartSession(auth.KeyId, text);
-                    var outcome = await ai.HandleAsync(doc.RootElement, ChooseSeed(options, http), ct, session).ConfigureAwait(false);
+                    var outcome = await ai.HandleAsync(doc.RootElement, ChooseSeed(options, http), ct, session, language: ExplanationLanguage.Requested(http)).ConfigureAwait(false);
                     session.Complete(outcome);
                     var result = outcome.RetryAfterSeconds > 0
                         ? new JsonTextResult(outcome.Status, PyJson.Serialize(outcome.Body), ("Retry-After", outcome.RetryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)))
@@ -393,7 +393,8 @@ public sealed class ServerHost
                 var lines = store.ReadLines(auth.KeyId, id);
                 if (lines.Count == 0) return Error(404, "game not found");
                 // the log's own lines, as they were written (review L8-2): numbers keep their form, nothing is parsed and written again
-                var records = lines.Select(line => (object?)new RawJson(line)).ToList();
+                string? lang = ExplanationLanguage.Requested(http);
+                var records = lines.Select(line => (object?)new RawJson(lang is null ? line : ExplanationLanguage.RewriteRecord(line, lang))).ToList();
                 return new JsonTextResult(200, PyJson.Serialize(new Dictionary<string, object?> { ["game_id"] = id, ["schema"] = SchemaOf(lines), ["records"] = records }));
             }
         });
@@ -408,7 +409,8 @@ public sealed class ServerHost
                 var lines = store.ReadLines(auth.KeyId, id);
                 if (lines.Count == 0) return Error(404, "game not found");
                 response.Headers.ContentDisposition = $"attachment; filename=\"{id}.jsonl\"";
-                return Results.Text(string.Join("\n", lines) + "\n", "application/x-ndjson", Encoding.UTF8);
+                string? downloadLang = ExplanationLanguage.Requested(http); // a download is the file as it was written, unless a language is asked for
+                return Results.Text(string.Join("\n", downloadLang is null ? lines : lines.Select(l => ExplanationLanguage.RewriteRecord(l, downloadLang))) + "\n", "application/x-ndjson", Encoding.UTF8);
             }
         });
 
@@ -524,7 +526,7 @@ public sealed class ServerHost
             using (lease)
             {
                 string? gameFilter = ctx.Request.Query["game_id"].ToString() is { Length: > 0 } g && GameLogStore.GameIdPattern.IsMatch(g) ? g : null;
-                await LiveStream.RunAsync(ctx, hub, auth.KeyId, gameFilter, options.Live.Heartbeat, LiveStream.LastEventId(ctx.Request)).ConfigureAwait(false);
+                await LiveStream.RunAsync(ctx, hub, auth.KeyId, gameFilter, options.Live.Heartbeat, LiveStream.LastEventId(ctx.Request), ExplanationLanguage.Requested(ctx.Request)).ConfigureAwait(false);
             }
         });
 

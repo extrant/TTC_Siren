@@ -170,6 +170,18 @@
     "word.cause.plus": ["加算"],
     "word.cause.combo": ["连携"],
     "word.assumed": ["（推测牌）"],
-    "word.known": [""]
+    "word.known": [""],
+
+    "word.card": ["第{card_id}号牌（上{up}右{right}下{down}左{left}）"],
+    "word.cell.0": ["左上角"], "word.cell.1": ["上边"], "word.cell.2": ["右上角"],
+    "word.cell.3": ["左边"], "word.cell.4": ["中心"], "word.cell.5": ["右边"],
+    "word.cell.6": ["左下角"], "word.cell.7": ["下边"], "word.cell.8": ["右下角"],
+    "word.side.上": ["上"], "word.side.右": ["右"], "word.side.下": ["下"], "word.side.左": ["左"],
+    "word.rule.同数": ["同数"], "word.rule.加算": ["加算"], "word.rule.逆转": ["逆转"], "word.rule.王牌杀手": ["王牌杀手"], "word.rule.同类强化": ["同类强化"], "word.rule.同类弱化": ["同类弱化"], "word.rule.秩序": ["秩序"], "word.rule.混乱": ["混乱"], "word.rule.选拔": ["选拔"], "word.rule.全明牌": ["全明牌"], "word.rule.三明牌": ["三明牌"],
+    "word.type.兽人": ["兽人"], "word.type.拂晓": ["拂晓"], "word.type.帝国": ["帝国"], "word.type.蛮神": ["蛮神"],
+    "word.sep.sentence": [""], "word.sep.list": ["、"], "word.sep.clause": ["；"], "word.sep.comma": ["，"],
+    "word.no_assumption": ["（无具体假设）"],
+    "word.balanced": ["平衡"],
+    "full.side_value": ["{side}边{value}"]
   }
 }

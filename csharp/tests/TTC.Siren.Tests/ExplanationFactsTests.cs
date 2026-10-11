@@ -32,7 +32,7 @@ public sealed class ExplanationFactsTests
 
     public ExplanationFactsTests(ITestOutputHelper output) => _output = output;
 
-    private static readonly Lazy<List<Decision>> All = new(LoadDecisions);
+    internal static readonly Lazy<List<Decision>> All = new(LoadDecisions);
 
     private static List<Decision> LoadDecisions()
     {
@@ -61,7 +61,7 @@ public sealed class ExplanationFactsTests
         return list;
     }
 
-    private static string Where(Decision d) => $"{d.Source} request #{d.Index} (seed {d.Seed}) {d.Tags}";
+    internal static string Where(Decision d) => $"{d.Source} request #{d.Index} (seed {d.Seed}) {d.Tags}";
 
     // =============================================================================================================== family 1
 

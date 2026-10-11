@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="templates\explain.zh-CN.json" LogicalName="explain.zh-CN.json" WithCulture="false" />
+    <EmbeddedResource Include="templates\explain.en.json" LogicalName="explain.en.json" WithCulture="false" />
   </ItemGroup>
 
 </Project>
