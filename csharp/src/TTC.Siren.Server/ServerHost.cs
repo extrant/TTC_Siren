@@ -132,7 +132,7 @@ public sealed class ServerHost
                     l.UseHttps(certificate);
                     l.Protocols = HttpProtocols.Http1;
                 });
-            k.Limits.MaxRequestBodySize = MaxBodyBytes;
+            k.Limits.MaxRequestBodySize = BodyReader.HardLimit; // each endpoint reads with its own, smaller limit (BodyReader)
             k.Limits.MaxRequestHeadersTotalSize = 32 * 1024;
             k.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(15);
             k.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(120);
@@ -252,17 +252,15 @@ public sealed class ServerHost
             if (failure is not null) return failure;
             using (lease)
             {
-                string text;
+                var (bytes, tooLarge) = await BodyReader.ReadAsync(http, MaxBodyBytes, ct).ConfigureAwait(false);
+                if (tooLarge is not null) return tooLarge; // review L8-3: 413, in the usual error form
+                string text = Encoding.UTF8.GetString(bytes!).TrimStart('\uFEFF');
                 JsonDocument doc;
                 try
                 {
-                    using var ms = new MemoryStream();
-                    await http.Body.CopyToAsync(ms, ct).ConfigureAwait(false);
-                    var bytes = ms.ToArray();
-                    text = Encoding.UTF8.GetString(bytes);
-                    doc = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 64 });
+                    doc = JsonDocument.Parse(bytes!, new JsonDocumentOptions { MaxDepth = 64 });
                 }
-                catch (Exception e) when (e is JsonException or Microsoft.AspNetCore.Http.BadHttpRequestException)
+                catch (JsonException)
                 {
                     return new JsonTextResult(400, PyJson.Serialize(new Dictionary<string, object?> { ["error"] = "Invalid input data" }));
                 }

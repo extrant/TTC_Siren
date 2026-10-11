@@ -52,6 +52,20 @@ internal sealed class CapturingLoggerProvider : ILoggerProvider
     }
 }
 
+/// <summary>Stops and disposes a started server at the end of a test.</summary>
+internal sealed class HostDisposer : IAsyncDisposable
+{
+    private readonly ServerHost _host;
+
+    public HostDisposer(ServerHost host) => _host = host;
+
+    public async ValueTask DisposeAsync()
+    {
+        await _host.StopAsync();
+        await _host.DisposeAsync();
+    }
+}
+
 /// <summary>
 /// Step D, cloud foundation: API keys (stored as hashes, handed out once by the admin CLI, honoured from either header, revoked without a restart),
 /// per-key rate limits and in-flight limits with 429 and Retry-After, HTTPS with HSTS, CORS for exact origins, security headers, loopback-only operator
@@ -451,19 +465,6 @@ public sealed class SecurityTests : IDisposable
         await app.StartAsync();
         _toDispose.Add(new AppDisposer(app));
         return (app, app.Urls.First());
-    }
-
-    private sealed class HostDisposer : IAsyncDisposable
-    {
-        private readonly ServerHost _host;
-
-        public HostDisposer(ServerHost host) => _host = host;
-
-        public async ValueTask DisposeAsync()
-        {
-            await _host.StopAsync();
-            await _host.DisposeAsync();
-        }
     }
 
     private sealed class AppDisposer : IAsyncDisposable
