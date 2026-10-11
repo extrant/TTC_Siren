@@ -59,6 +59,9 @@ public sealed class ServerOptions
     /// <summary>Run one search on every worker before the first request (JIT and the first touch of each worker's tables), so the first minute after a restart is not slow (review O8-3).</summary>
     public bool WarmUp { get; set; } = true;
 
+    /// <summary>Access classes and the capacity they get (<c>Server:Access</c>).</summary>
+    public AccessOptions Access { get; set; } = new();
+
     /// <summary>The live event stream (<c>Server:Live</c>).</summary>
     public Live.LiveOptions Live { get; set; } = new();
 
@@ -142,6 +145,7 @@ public sealed class ServerOptions
         Security.Validate(Host, IPAddress.IsLoopback(IPAddress.Parse(Host)));
         if (LiveBuffer < 1) throw new ArgumentException("LiveBuffer must be at least 1");
         Live.Validate();
+        Access.Validate();
         ValidateOriginTimeout();
     }
 

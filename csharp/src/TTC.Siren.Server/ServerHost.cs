@@ -61,8 +61,12 @@ public sealed class ServerHost
 
     private readonly WebApplication _app;
 
-    private ServerHost(WebApplication app, ServerOptions options, AiMoveService ai, WorkerPool pool, string cardDbSha256, GameLogService gameLog, ApiKeyStore? keys)
+    private ServerHost(WebApplication app, ServerOptions options, AiMoveService ai, WorkerPool pool, string cardDbSha256, GameLogService gameLog, ApiKeyStore? keys,
+        SessionStore sessions, AuditLog audit, AnonymousGate anonymousGate)
     {
+        Sessions = sessions;
+        Audit = audit;
+        AnonymousGate = anonymousGate;
         GameLog = gameLog;
         _app = app;
         Options = options;
@@ -81,6 +85,14 @@ public sealed class ServerHost
     public string CardDbSha256 { get; }
     public GameLogService GameLog { get; }
     public ApiKeyStore? Keys { get; }
+
+    /// <summary>The web sessions (the browser holds the id in an HttpOnly cookie, the server only its hash).</summary>
+    public SessionStore Sessions { get; }
+
+    public AuditLog Audit { get; }
+
+    /// <summary>The per-address limits for visitors who are not logged in. 8B has no anonymous compute endpoint; the coaching of 8D will use this gate and the anonymous class of the pool.</summary>
+    public AnonymousGate AnonymousGate { get; }
     public LiveHub Hub => GameLog.Hub;
 
     /// <summary>The plain HTTP address (valid after <see cref="StartAsync"/>), or empty when only HTTPS is served.</summary>
@@ -139,12 +151,14 @@ public sealed class ServerHost
             k.AddServerHeader = false;
         });
 
-        var pool = new WorkerPool(options.Workers, options.TtEntries, options.MemoEntries, options.QueueLimit, options.QueueWaitMs, options.AgingMs);
+        var pool = new WorkerPool(options.Workers, options.TtEntries, options.MemoEntries, options.QueueLimit, options.QueueWaitMs, options.AgingMs,
+            capacity: options.Access.CapacityFor(options.Workers));
         var templates = options.TemplatesDirectory is { } dir ? TemplateSet.Load(Path.Combine(dir, "explain.zh-CN.json")) : TemplateSet.Default();
         var ai = new AiMoveService(catalog, new SolveService(db), pool, templates, options.TtEntries)
         {
             PriorityScheduling = options.PriorityScheduling,
             Caps = new SearchCaps(MaxSeconds: options.MaxSearchSeconds > 0 ? options.MaxSearchSeconds : null),
+            AnonymousCaps = options.Access.AnonymousCaps,
         };
         string version = typeof(ServerHost).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
         var store = new GameLogStore(options.GameLog, time);
@@ -171,10 +185,17 @@ public sealed class ServerHost
         else limiter = new KeyLimiter(null, security, time);
         var proxy = options.Proxy.Enabled ? new PythonProxy(options.Proxy) : null;
         var clientIps = new ClientIpResolver(security.TrustedProxies, AppContext.BaseDirectory); // fails now, not at the first request, when the range file is missing
+        var sessions = new SessionStore(keys, security.Sessions, time);
+        var cookies = new SessionCookie(security);
+        Action<string>? infoLog = null; // bound to the host's logger once it exists
+        var audit = new AuditLog(security.Sessions.AuditLogFile, message => infoLog?.Invoke(message), time);
+        var loginLimiter = new IpLimiter(time);
+        var anonymousGate = new AnonymousGate(options.Access, time);
 
         var app = builder.Build();
         var logger = app.Logger;
         authLog = message => logger.LogWarning("{Message}", message);
+        infoLog = message => logger.LogInformation("{Message}", message);
         var started = Stopwatch.GetTimestamp();
         var corsOrigins = new HashSet<string>(security.CorsOrigins.Select(o => o.TrimEnd('/')), StringComparer.Ordinal);
 
@@ -238,19 +259,47 @@ public sealed class ServerHost
                 Placeholder.Html(version, pool.Workers, pool.Idle, Stopwatch.GetElapsedTime(started).TotalSeconds), "text/html; charset=utf-8"));
         }
 
-        // ---- admission: key, then limits (the lease ends with the request)
-        (AuthResult Auth, IDisposable? Lease, IResult? Failure) Admit(HttpRequest http, bool stream = false)
+        // ---- admission: who is it -- an API key in a header (the plugin, or any program), or, on the endpoints that accept it, the session cookie of the web login --
+        //      then the limits of that key for that class, and the class the work is done as. The lease ends with the request.
+        //      A request that carries a key is judged by the key even if it also carries a cookie. A request authenticated by the cookie must also pass the CSRF check
+        //      when it changes something.
+        (AuthResult Auth, AccessClass Class, IDisposable? Lease, IResult? Failure) Admit(HttpRequest http, bool acceptSession, bool stream = false)
         {
-            var auth = authenticator!.Authenticate(http);
+            AuthResult auth;
+            var cls = AccessClass.Plugin;
+            if (acceptSession && KeyAuthenticator.ExtractKey(http) is null && cookies.Has(http))
+            {
+                var session = sessions.Find(cookies.Read(http));
+                if (session is null)
+                {
+                    cookies.Clear(http.HttpContext.Response, http); // the browser forgets the dead session
+                    return (default, cls, null, Error(401, "session expired or invalid; log in again"));
+                }
+                if (OriginPolicy.IsStateChanging(http.Method) && !OriginPolicy.IsSameOrigin(http)) return (default, cls, null, Error(403, "cross-site request refused"));
+                auth = AuthResult.FromSession(session.KeyId);
+                cls = AccessClass.Web;
+            }
+            else auth = authenticator!.Authenticate(http);
             if (!auth.Ok)
-                return (auth, null, new JsonTextResult(auth.Status, PyJson.Serialize(new Dictionary<string, object?> { ["error"] = auth.Error }),
+                return (auth, cls, null, new JsonTextResult(auth.Status, PyJson.Serialize(new Dictionary<string, object?> { ["error"] = auth.Error }),
                     auth.Status == 401 ? new[] { ("WWW-Authenticate", "Bearer") } : Array.Empty<(string, string)>()));
-            if (limiter is null) return (auth, null, null);
-            var decision = stream ? limiter.TryOpenStream(auth.KeyId) : limiter.TryEnter(auth.KeyId);
+            if (limiter is null) return (auth, cls, null, null);
+            var decision = stream ? limiter.TryOpenStream(auth.KeyId, cls) : limiter.TryEnter(auth.KeyId, cls);
             if (!decision.Allowed)
-                return (auth, null, new JsonTextResult(429, PyJson.Serialize(new Dictionary<string, object?> { ["error"] = decision.Reason, ["retry_after_seconds"] = decision.RetryAfterSeconds }),
+                return (auth, cls, null, new JsonTextResult(429, PyJson.Serialize(new Dictionary<string, object?> { ["error"] = decision.Reason, ["retry_after_seconds"] = decision.RetryAfterSeconds }),
                     ("Retry-After", decision.RetryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture))));
-            return (auth, decision.Lease, null);
+            return (auth, cls, decision.Lease, null);
+        }
+
+        Dictionary<string, object?> ClassStats()
+        {
+            var classes = new Dictionary<string, object?>();
+            foreach (var c in new[] { AccessClass.Plugin, AccessClass.Web, AccessClass.Anonymous })
+                classes[c.ToString().ToLowerInvariant()] = new Dictionary<string, object?>
+                {
+                    ["running"] = pool.RunningOf(c), ["queued"] = pool.WaitingOf(c), ["served"] = pool.ServedOf(c), ["busyAnswers"] = pool.BusyAnswersOf(c),
+                };
+            return classes;
         }
 
         app.MapGet("/health", () =>
@@ -260,6 +309,7 @@ public sealed class ServerHost
                 ["status"] = "ok", ["server"] = "TTC.Siren.Server", ["version"] = version, ["cardDbSha256"] = sha, ["cardCount"] = db.Count,
                 ["workers"] = pool.Workers, ["workersCreated"] = pool.Created, ["idleWorkers"] = pool.Idle, ["queued"] = pool.Waiting, ["queueLimit"] = pool.QueueLimit,
                 ["queueWaitMs"] = pool.QueueWaitMs, ["agingMs"] = pool.AgingMs, ["busyAnswers"] = pool.BusyAnswers, ["served"] = pool.Served,
+                ["reservedForPlugin"] = pool.Capacity.PluginReservedWorkers, ["anonymousMaxWorkers"] = pool.Capacity.AnonymousMaxWorkers, ["classes"] = ClassStats(),
                 ["uptimeSeconds"] = Stopwatch.GetElapsedTime(started).TotalSeconds,
             };
             return new JsonTextResult(200, PyJson.Serialize(body));
@@ -268,7 +318,7 @@ public sealed class ServerHost
         // ---- the plugin's endpoint
         app.MapPost("/ai_move", async (HttpRequest http, CancellationToken ct) =>
         {
-            var (auth, lease, failure) = Admit(http);
+            var (auth, _, lease, failure) = Admit(http, acceptSession: false); // the plugin's endpoint: an API key, never a cookie
             if (failure is not null) return failure;
             using (lease)
             {
@@ -290,7 +340,9 @@ public sealed class ServerHost
                     var session = gameLog.StartSession(auth.KeyId, text);
                     var outcome = await ai.HandleAsync(doc.RootElement, ChooseSeed(options, http), ct, session).ConfigureAwait(false);
                     session.Complete(outcome);
-                    var result = new JsonTextResult(outcome.Status, PyJson.Serialize(outcome.Body));
+                    var result = outcome.RetryAfterSeconds > 0
+                        ? new JsonTextResult(outcome.Status, PyJson.Serialize(outcome.Body), ("Retry-After", outcome.RetryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                        : new JsonTextResult(outcome.Status, PyJson.Serialize(outcome.Body));
                     self?.RequestCompleted?.Invoke(outcome);
                     return result;
                 }
@@ -304,7 +356,7 @@ public sealed class ServerHost
                 string captured = path;
                 app.MapPost(captured, async (HttpRequest http, CancellationToken ct) =>
                 {
-                    var (_, lease, failure) = Admit(http);
+                    var (_, _, lease, failure) = Admit(http, acceptSession: false);
                     if (failure is not null) return failure;
                     using (lease) return await proxy.ForwardAsync(http, captured, ct).ConfigureAwait(false);
                 });
@@ -313,7 +365,7 @@ public sealed class ServerHost
         // ---- the game logs of the key (a key sees only its own games)
         app.MapGet("/v1/games", (HttpRequest http) =>
         {
-            var (auth, lease, failure) = Admit(http);
+            var (auth, _, lease, failure) = Admit(http, acceptSession: true);
             if (failure is not null) return failure;
             using (lease)
             {
@@ -333,7 +385,7 @@ public sealed class ServerHost
 
         app.MapGet("/v1/games/{id}", (string id, HttpRequest http) =>
         {
-            var (auth, lease, failure) = Admit(http);
+            var (auth, _, lease, failure) = Admit(http, acceptSession: true);
             if (failure is not null) return failure;
             using (lease)
             {
@@ -348,7 +400,7 @@ public sealed class ServerHost
 
         app.MapGet("/v1/games/{id}/download", (string id, HttpRequest http, HttpResponse response) =>
         {
-            var (auth, lease, failure) = Admit(http);
+            var (auth, _, lease, failure) = Admit(http, acceptSession: true);
             if (failure is not null) return failure;
             using (lease)
             {
@@ -362,7 +414,7 @@ public sealed class ServerHost
 
         app.MapDelete("/v1/games/{id}", (string id, HttpRequest http) =>
         {
-            var (auth, lease, failure) = Admit(http);
+            var (auth, _, lease, failure) = Admit(http, acceptSession: true);
             if (failure is not null) return failure;
             using (lease)
             {
@@ -373,10 +425,97 @@ public sealed class ServerHost
             }
         });
 
+        // ---- the web login: a key is exchanged for a session cookie (decision A-27). No accounts, no passwords. The key is read from the body of this one request and
+        //      is not stored, logged or put into the cookie; the cookie holds a random session id, the server holds only its hash.
+        string ClientIpText(HttpRequest r) => (r.HttpContext.Items[HttpItems.ClientIp] as IPAddress ?? IPAddress.Loopback).ToString();
+
+        app.MapPost("/v1/session", async (HttpRequest http, HttpResponse response, CancellationToken ct) =>
+        {
+            string ip = ClientIpText(http);
+            if (keys is null) return Error(501, "login is not available on this server");
+            var attempt = loginLimiter.TryEnter(ip, security.Sessions.LoginAttemptsPerMinute, security.Sessions.LoginBurst, 8);
+            if (!attempt.Allowed)
+            {
+                audit.Login(ip, "throttled", null);
+                return new JsonTextResult(429, PyJson.Serialize(new Dictionary<string, object?> { ["error"] = "too many login attempts, try again later", ["retry_after_seconds"] = attempt.RetryAfterSeconds }),
+                    ("Retry-After", attempt.RetryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+            using (attempt.Lease)
+            {
+                // a login form posted by another site is not ours (a browser always sends Origin with a POST; a program that sends none is fine)
+                if (http.Headers.ContainsKey("Origin") && !OriginPolicy.IsSameOrigin(http))
+                {
+                    audit.Login(ip, "failed", null);
+                    return Error(403, "cross-site request refused");
+                }
+                var (bytes, tooLarge) = await BodyReader.ReadAsync(http, 4096, ct).ConfigureAwait(false);
+                if (tooLarge is not null) return tooLarge;
+                string? secret = null;
+                try
+                {
+                    using var doc = JsonDocument.Parse(bytes!, new JsonDocumentOptions { MaxDepth = 4 });
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("key", out var k) && k.ValueKind == JsonValueKind.String) secret = k.GetString();
+                }
+                catch (JsonException)
+                {
+                }
+                var record = string.IsNullOrWhiteSpace(secret) || secret.Length > 200 ? null : keys.Find(secret.Trim());
+                if (record is null || !record.Enabled)
+                {
+                    audit.Login(ip, "failed", null);
+                    return Error(401, "login failed"); // the same answer for an unknown, a mistyped and a revoked key
+                }
+                var (id, session) = sessions.Create(record.Id);
+                cookies.Write(response, http, id, session.Expires, security.Sessions.Lifetime);
+                audit.Login(ip, "success", record.Id);
+                return new JsonTextResult(200, PyJson.Serialize(new Dictionary<string, object?>
+                {
+                    ["ok"] = true, ["key"] = new Dictionary<string, object?> { ["id"] = record.Id, ["name"] = record.Name }, ["expires"] = JsonConv.Utc(session.Expires),
+                }));
+            }
+        });
+
+        app.MapDelete("/v1/session", (HttpRequest http, HttpResponse response) =>
+        {
+            string? id = cookies.Read(http);
+            if (id is null) return new JsonTextResult(200, PyJson.Serialize(new Dictionary<string, object?> { ["ok"] = true, ["logged_out"] = false }));
+            if (!OriginPolicy.IsSameOrigin(http)) return Error(403, "cross-site request refused"); // the cookie authenticates this request: CSRF check
+            var session = sessions.Find(id);
+            sessions.Remove(id);
+            cookies.Clear(response, http);
+            audit.Logout(ClientIpText(http), session?.KeyId);
+            return new JsonTextResult(200, PyJson.Serialize(new Dictionary<string, object?> { ["ok"] = true, ["logged_out"] = true }));
+        });
+
+        app.MapGet("/v1/me", (HttpRequest http) =>
+        {
+            var (auth, cls, lease, failure) = Admit(http, acceptSession: true);
+            if (failure is not null) return failure;
+            using (lease)
+            {
+                var record = keys?.GetById(auth.KeyId);
+                var me = new Dictionary<string, object?>
+                {
+                    ["authenticated"] = true, ["via"] = auth.Source == AuthSource.Session ? "session" : "api_key", ["class"] = cls.ToString().ToLowerInvariant(),
+                    // never the key and never its hash: the public id, the name and the limits
+                    ["key"] = new Dictionary<string, object?>
+                    {
+                        ["id"] = auth.KeyId, ["name"] = record?.Name ?? auth.KeyId, ["created"] = record is null ? null : JsonConv.Utc(record.Created),
+                        ["rate_per_minute"] = record?.RatePerMinute ?? security.DefaultRatePerMinute, ["burst"] = record?.Burst ?? security.DefaultBurst,
+                        ["max_in_flight"] = record?.MaxInFlight ?? security.DefaultMaxInFlight,
+                    },
+                    ["session"] = auth.Source == AuthSource.Session && sessions.Find(cookies.Read(http)) is { } s
+                        ? new Dictionary<string, object?> { ["created"] = JsonConv.Utc(s.Created), ["expires"] = JsonConv.Utc(s.Expires) } : null,
+                    ["server"] = new Dictionary<string, object?> { ["version"] = version },
+                };
+                return new JsonTextResult(200, PyJson.Serialize(me));
+            }
+        });
+
         // ---- the live event stream (Server-Sent Events) of the key
         app.MapGet("/v1/live", async (HttpContext ctx) =>
         {
-            var (auth, lease, failure) = Admit(ctx.Request, stream: true);
+            var (auth, _, lease, failure) = Admit(ctx.Request, acceptSession: true, stream: true);
             if (failure is not null)
             {
                 await failure.ExecuteAsync(ctx).ConfigureAwait(false);
@@ -401,7 +540,7 @@ public sealed class ServerHost
             {
                 ["version"] = version, ["workers"] = pool.Workers, ["workers_created"] = pool.Created, ["idle"] = pool.Idle, ["queued"] = pool.Waiting,
                 ["queue_limit"] = pool.QueueLimit, ["busy_answers"] = pool.BusyAnswers, ["served"] = pool.Served, ["table_memory_bytes"] = pool.MemoryBytes,
-                ["keys"] = keys?.List().Count(k => k.Enabled), ["https"] = security.Https.Enabled, ["proxy"] = proxy is not null,
+                ["keys"] = keys?.List().Count(k => k.Enabled), ["sessions"] = sessions.Count, ["classes"] = ClassStats(), ["https"] = security.Https.Enabled, ["proxy"] = proxy is not null,
                 ["game_log_dir"] = options.GameLog.Directory, ["uptime_seconds"] = Stopwatch.GetElapsedTime(started).TotalSeconds,
             }));
         });
@@ -417,7 +556,7 @@ public sealed class ServerHost
             logger.LogInformation("Client addresses are read from {Header} for requests from trusted proxies ({Ranges} configured ranges, loopback {Loopback})",
                 security.TrustedProxies.ClientIpHeader, clientIps.RangeCount, security.TrustedProxies.TrustLoopback);
 
-        self = new ServerHost(app, options, ai, pool, sha, gameLog, keys);
+        self = new ServerHost(app, options, ai, pool, sha, gameLog, keys, sessions, audit, anonymousGate);
         return self;
     }
 

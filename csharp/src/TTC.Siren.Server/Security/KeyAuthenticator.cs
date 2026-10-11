@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using Microsoft.AspNetCore.Http;
+using TTC.Siren.Engine;
 
 namespace TTC.Siren.Server.Security;
 
@@ -123,11 +124,17 @@ public sealed class KeyLimiter
             : (record.RatePerMinute, record.Burst, record.MaxInFlight);
     }
 
+    /// <summary>
+    /// The limiter state of a key and an access class. The web login and the plugin use the same key with the same limits, but each has its own bucket and its
+    /// own in-flight count: a browser tab that polls cannot use up the requests per minute that the plugin needs for a game.
+    /// </summary>
+    private static string StateKey(string keyId, AccessClass access) => access == AccessClass.Plugin ? keyId : keyId + "#" + access;
+
     /// <summary>Admits one request of the key, or says how long to wait.</summary>
-    public LimitDecision TryEnter(string keyId)
+    public LimitDecision TryEnter(string keyId, AccessClass access = AccessClass.Plugin)
     {
         var (rate, burst, maxInFlight) = LimitsOf(keyId);
-        var state = _states.GetOrAdd(keyId, _ => new State { Tokens = burst, LastTicks = _time.GetUtcNow().UtcTicks });
+        var state = _states.GetOrAdd(StateKey(keyId, access), _ => new State { Tokens = burst, LastTicks = _time.GetUtcNow().UtcTicks });
         lock (state.Gate)
         {
             long now = _time.GetUtcNow().UtcTicks;
@@ -146,10 +153,10 @@ public sealed class KeyLimiter
     }
 
     /// <summary>Admits one more open event stream of the key (limited by <see cref="SecurityOptions.MaxLiveStreamsPerKey"/>).</summary>
-    public LimitDecision TryOpenStream(string keyId)
+    public LimitDecision TryOpenStream(string keyId, AccessClass access = AccessClass.Plugin)
     {
         var (_, burst, _) = LimitsOf(keyId);
-        var state = _states.GetOrAdd(keyId, _ => new State { Tokens = burst, LastTicks = _time.GetUtcNow().UtcTicks });
+        var state = _states.GetOrAdd(StateKey(keyId, access), _ => new State { Tokens = burst, LastTicks = _time.GetUtcNow().UtcTicks });
         lock (state.Gate)
         {
             if (state.Streams >= _options.MaxLiveStreamsPerKey)

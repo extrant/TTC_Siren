@@ -47,6 +47,12 @@ public sealed class AiMoveOutcome
     /// <summary>The number of the worker grant this request got from the pool (1, 2, 3 ... in the order the pool served requests; 0: none).</summary>
     public long PoolGrant;
 
+    /// <summary>Seconds a client should wait before asking again, when the answer is "busy" (503): becomes the <c>Retry-After</c> header; 0: none.</summary>
+    public int RetryAfterSeconds;
+
+    /// <summary>The access class the request was handled as.</summary>
+    public AccessClass Access;
+
     /// <summary>The "generated unknown card" flag of every hand card at parse time (before the analysis reorders the hands), per player, in request order.</summary>
     public bool[][]? Generated;
     public LMove? Move;
@@ -80,6 +86,9 @@ public sealed class AiMoveService
     /// <summary>Limits that apply to every request (the server's cap on <c>max_time</c>); none by default, so that the parity tests see the Python behaviour.</summary>
     public SearchCaps Caps { get; set; } = SearchCaps.None;
 
+    /// <summary>Further limits for an anonymous request (decision A-27): the stricter of these and <see cref="Caps"/> applies. None by default.</summary>
+    public SearchCaps AnonymousCaps { get; set; } = SearchCaps.None;
+
     public AiMoveService(CardCatalog catalog, SolveService solve, WorkerPool pool, TemplateSet? templates = null, int ttEntries = 0)
     {
         _ttEntries = ttEntries;
@@ -93,12 +102,13 @@ public sealed class AiMoveService
     public CardCatalog Catalog => _catalog;
 
     /// <summary>The answer to an engine problem (A-20): <c>error</c> in the usual form plus <c>engine</c> and <c>engine_error</c>.</summary>
-    private static AiMoveOutcome EngineError(string reason, string detail, int status)
+    private static AiMoveOutcome EngineError(string reason, string detail, int status, int retryAfterSeconds = 0)
     {
         string message = "C# engine: " + (detail.Length == 0 ? reason : $"{reason} ({detail})");
         return new AiMoveOutcome
         {
             Status = status,
+            RetryAfterSeconds = retryAfterSeconds,
             EngineError = reason,
             Body = new Dictionary<string, object?> { ["error"] = message, ["engine"] = "csharp", ["engine_error"] = reason },
         };
@@ -111,9 +121,9 @@ public sealed class AiMoveService
     /// Handles one request. <paramref name="seed"/> seeds the unknown-card sampling (<see cref="PythonRandom"/>): production passes a fresh
     /// cryptographic seed and logs it, tests pass the seed Python was seeded with.
     /// </summary>
-    public async Task<AiMoveOutcome> HandleAsync(JsonElement data, ulong seed, CancellationToken ct, IAiMoveObserver? observer = null)
+    public async Task<AiMoveOutcome> HandleAsync(JsonElement data, ulong seed, CancellationToken ct, IAiMoveObserver? observer = null, AccessClass access = AccessClass.Plugin)
     {
-        var outcome = new AiMoveOutcome { Seed = seed, TtEntries = _ttEntries };
+        var outcome = new AiMoveOutcome { Seed = seed, TtEntries = _ttEntries, Access = access };
         try
         {
             var rng = new PythonRandom(seed);
@@ -133,7 +143,7 @@ public sealed class AiMoveService
             // max_depth / max_time as the Python client of the engine reads them (wire_max_depth, wire_max_time)
             if (!ReadNumber(data, "max_depth", 10, out var depthNumber, out string? depthError)) return Finish(outcome, EngineError("unsupported_parameter", depthError!, 400));
             if (!ReadNumber(data, "max_time", 10, out var timeNumber, out string? timeError)) return Finish(outcome, EngineError("unsupported_parameter", timeError!, 400));
-            var caps = Caps;
+            var caps = access == AccessClass.Anonymous ? Caps.Min(AnonymousCaps) : Caps;
             var requestedTime = timeNumber;
             depthNumber = CapDepth(depthNumber, caps.MaxDepth, out bool depthClamped);
             timeNumber = CapTime(timeNumber, caps.MaxSeconds, out bool timeClamped);
@@ -156,7 +166,7 @@ public sealed class AiMoveService
             outcome.ExplainLevel = explainLevel;
 
             var (result, engineError, solveRequest, facts, explainError, explainMs) =
-                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, observer, ct, (w, c, g) => { outcome.QueueWaitMs = w; outcome.RequestClass = c; outcome.PoolGrant = g; }).ConfigureAwait(false);
+                await RunEngineAsync(parser, req, depthNumber, timeNumber, explainLevel, observer, ct, access, (w, c, g) => { outcome.QueueWaitMs = w; outcome.RequestClass = c; outcome.PoolGrant = g; }).ConfigureAwait(false);
             if (engineError is not null) return Finish(outcome, engineError);
             outcome.Solve = result;
             outcome.Request = solveRequest;
@@ -325,6 +335,7 @@ public sealed class AiMoveService
         outcome.Status = answer.Status;
         outcome.Body = answer.Body;
         outcome.EngineError = answer.EngineError;
+        outcome.RetryAfterSeconds = answer.RetryAfterSeconds;
         return outcome;
     }
 
@@ -404,7 +415,7 @@ public sealed class AiMoveService
     }
 
     private async Task<(SolveResult? Result, AiMoveOutcome? Error, SolveRequest? Request, ExplanationFacts? Facts, string? ExplainError, double ExplainMs)> RunEngineAsync(
-        RequestParser parser, ParsedRequest req, Num depth, Num time, string explainLevel, IAiMoveObserver? observer, CancellationToken ct,
+        RequestParser parser, ParsedRequest req, Num depth, Num time, string explainLevel, IAiMoveObserver? observer, CancellationToken ct, AccessClass access,
         Action<double, int, long>? onQueued = null)
     {
         double queueWaitMs = 0;
@@ -420,13 +431,24 @@ public sealed class AiMoveService
         }
 
         int requestClass = PriorityScheduling ? RequestClass.Estimate(9 - req.Board.Occupancy(), req.UseEndgameRobust) : TTC.Siren.Engine.RequestClass.Medium;
-        var acquired = await _pool.AcquireAsync(ct, requestClass).ConfigureAwait(false);
+        var acquired = await _pool.AcquireAsync(ct, requestClass, access).ConfigureAwait(false);
         var (worker, reason) = (acquired.Worker, acquired.Reason);
         queueWaitMs = acquired.WaitedMs;
         usedClass = requestClass;
         if (worker is null)
-            return (null, EngineError("busy", reason == BusyReason.QueueFull ? "queue_full" : reason == BusyReason.QueueTimeout ? "queue_timeout" : "aborted", 503),
-                null, null, null, 0);
+        {
+            // 503 busy, and when to come back: a short wait for the classes that are served at once, longer for visitors who are not logged in
+            string why = reason switch
+            {
+                BusyReason.QueueFull => "queue_full",
+                BusyReason.QueueTimeout => "queue_timeout",
+                BusyReason.AnonymousQueueFull => "anonymous_queue_full",
+                BusyReason.AnonymousQueueTimeout => "anonymous_queue_timeout",
+                _ => "aborted",
+            };
+            int retry = reason == BusyReason.Abandoned ? 0 : access == AccessClass.Anonymous ? 10 : 5;
+            return (null, EngineError("busy", why, 503, retry), null, null, null, 0);
+        }
         try
         {
             var result = _solve.Solve(request, worker, observer is null ? null : observer.OnDepth, observer is null ? null : observer.OnRobust);

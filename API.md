@@ -581,3 +581,60 @@ HTTP 状态码：
 - **浏览器跨域：** 只允许运维配置的精确来源（没有通配符），预检请求（`OPTIONS`）对其他来源返回 `403`。
 - **隐私：** 对局日志保存在服务器上，按密钥隔离，默认保留 30 天；用户可用自己的密钥下载或删除（§5.2）。服务器的日志里永远不会出现完整密钥。
 
+### 5.5 Phase 8B：网页登录与访问分级
+
+**谁是谁（决定 A-27）。** 没有账号、没有密码。同一个 API 密钥有两种用法，服务器据此把请求分成三个**访问等级**：
+
+| 等级 | 怎么识别 | 能做什么 | 算力 |
+|---|---|---|---|
+| **插件** | 请求头里的 API 密钥（`Authorization: Bearer` 或 `X-Api-Key`） | `/ai_move`、对局日志、实时流、`/v1/me` | **最高优先**；`Server:Access:PluginReservedShare`（默认 25 %）的工作线程只留给它 |
+| **网页** | 用密钥登录一次换来的会话 Cookie | 对局日志、实时流、`/v1/me`、登出 | 次之；与匿名合计不会占用插件预留的线程 |
+| **匿名** | 没有密钥也没有 Cookie | 只读页面（落地页、演示回放）；8D 的对局指导 | 最低；最多占 `AnonymousMaxShare`（默认 25 %）的线程，有自己的短队列、深度与时间上限、按真实 IP 的限流 |
+
+等级按严格优先级调度（插件 > 网页 > 匿名），每一级内部仍按估计代价排序并带老化（O8-1），所以**一级之内不会饿死**；匿名洪水最多把匿名队列填满（再来的收到 `503 busy`，带 `Retry-After`），插件请求只会等同级中已经在跑的搜索。
+
+**每个端点接受什么认证：**
+
+| 端点 | 接受 | 备注 |
+|---|---|---|
+| `POST /ai_move` | **仅 API 密钥** | 带着会话 Cookie 而没有密钥 → `401`。插件契约不变 |
+| `POST /api/recommend`、`/api/draft/analyze`、`/api/winrate` | 仅 API 密钥 | |
+| `GET /v1/games`、`/v1/games/{id}`、`/v1/games/{id}/download` | API 密钥或会话 Cookie | |
+| `DELETE /v1/games/{id}` | API 密钥；或会话 Cookie **加同源检查**（见下） | |
+| `GET /v1/live` | API 密钥或会话 Cookie | |
+| `GET /v1/me` | API 密钥或会话 Cookie | |
+| `POST /v1/session` | 无（密钥在请求体里） | 按真实 IP 限速，写审计日志 |
+| `DELETE /v1/session` | 会话 Cookie + 同源检查（没有 Cookie 时什么也不做，返回 `logged_out:false`） | |
+| `GET /health`、页面、静态文件 | 无 | |
+| `/admin/*` | 本机且没有任何代理头 | 不要发布到公网 |
+
+同时带了密钥和 Cookie 的请求按**密钥**处理（过期的 Cookie 不会妨碍 API 客户端）。
+
+**`POST /v1/session`** 请求体 `{"key": "ttc_…"}`（最大 4 KiB）。成功 `200`：
+
+```json
+{"ok": true, "key": {"id": "k-1a2b3c4d", "name": "alice"}, "expires": "2026-10-12T03:00:00.000Z"}
+```
+
+并设置 Cookie：`ttc_session=<43 个字符的 base64url，即 256 位随机数>; HttpOnly; SameSite=Strict; Path=/; Max-Age=<生存期>`；在 HTTPS 或 `BehindTlsProxy` 下再加 `Secure`，名字变成 `__Host-ttc_session`（浏览器只接受 Secure、无 Domain、`Path=/` 的 `__Host-` Cookie，兄弟子域名无法覆盖它）。**密钥不会出现在响应、Cookie、日志里**；服务器只保存会话 id 的 SHA-256。失败一律 `401 {"error": "login failed"}`（未知、输错、已吊销的密钥说同一句话，不设置 Cookie）；来得太频繁 `429 {"error": "...try again later", "retry_after_seconds": n}` 加 `Retry-After`（每个真实 IP 默认突发 5 次、之后每分钟 6 次；成功和失败都算；节流期间连正确的密钥也要等）；来自别的站点的表单（`Origin` 不是本站）`403`。
+
+**会话的结束：** `DELETE /v1/session`（登出）；到期（`Security:Sessions:LifetimeHours`，默认 12 小时）；密钥被吊销或停用（每次使用都检查，不需要重启，1 秒内生效）；同一密钥超过 `MaxPerKey`（默认 20）个会话时最旧的被结束；服务器重启（会话在内存里，需重新登录）。失效的 Cookie 会得到 `401`，并附带清除它的 `Set-Cookie`。
+
+**CSRF 防护。** Cookie 带 `SameSite=Strict`，此外由 Cookie 认证的**会改变状态**的请求（`DELETE`、`POST`…）必须来自本站自己的页面：`Origin`（没有则 `Referer`）的主机与端口必须等于请求的 `Host`；浏览器若发了 `Sec-Fetch-Site`，必须是 `same-origin`（或 `none`）；三者都缺则拒绝。否则 `403 {"error": "cross-site request refused"}`。用 API 密钥认证的请求不需要这些（没有任何东西会被浏览器自动带上）。CORS 从不返回 `Access-Control-Allow-Credentials`，别的来源拿不到 Cookie。
+
+**`GET /v1/me`：**
+
+```json
+{"authenticated": true, "via": "session", "class": "web",
+ "key": {"id": "k-1a2b3c4d", "name": "alice", "created": "...", "rate_per_minute": 120, "burst": 20, "max_in_flight": 4},
+ "session": {"created": "...", "expires": "..."}, "server": {"version": "..."}}
+```
+
+`via` 为 `api_key`（此时 `class` 为 `plugin`，`session` 为 `null`）或 `session`。**不会**返回密钥或它的哈希。
+
+**限流。** 网页与插件虽然用同一个密钥（同样的上限），但各有自己的令牌桶和并发计数：浏览器页面的轮询用不掉插件下棋所需的次数。匿名按真实 IP 限速。
+
+**搜索上限。** 匿名请求的 `max_depth` 被降到 `Server:Access:AnonymousMaxDepth`（默认 8），`max_time` 降到 `AnonymousMaxSeconds`（默认 3 秒），响应的 `engine_info.limits` 会说明。8B 没有匿名计算端点；这个等级与上限由 8D 的对局指导使用，已在池与服务层测试。
+
+**`503 busy`** 现在都带 `Retry-After`（匿名 10 秒，其他 5 秒）；`engine_error` 可能是 `queue_full`、`queue_timeout`、`anonymous_queue_full`、`anonymous_queue_timeout`。
+

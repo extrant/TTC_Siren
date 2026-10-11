@@ -48,6 +48,9 @@ public sealed class SecurityOptions
     /// <summary>Which peers may name the real client in a header (Cloudflare, a local tunnel). Nothing is trusted by default.</summary>
     public TrustedProxyOptions TrustedProxies { get; set; } = new();
 
+    /// <summary>The web login: sessions, login throttling, audit log (decision A-27).</summary>
+    public SessionOptions Sessions { get; set; } = new();
+
     /// <summary>
     /// The server listens on a non-loopback address without HTTPS because a reverse proxy in front of it terminates TLS. Without this flag (or
     /// HTTPS) the server refuses to listen on a non-loopback address: keys would cross the network in clear text.
@@ -60,6 +63,7 @@ public sealed class SecurityOptions
         if (MaxLiveStreamsPerKey < 1) throw new ArgumentException("MaxLiveStreamsPerKey must be at least 1");
         if (CorsOrigins.Any(o => o == "*" || !Uri.TryCreate(o, UriKind.Absolute, out _))) throw new ArgumentException("CorsOrigins must be exact origins such as https://app.example.org (no wildcard)");
         TrustedProxies.Validate();
+        Sessions.Validate();
         if (Https.Enabled)
         {
             if (string.IsNullOrWhiteSpace(Https.PfxPath)) throw new ArgumentException("Security:Https:PfxPath is required when HTTPS is enabled");

@@ -56,6 +56,14 @@ Settings come from `appsettings.json` (section `Server`), environment variables 
 | `MaxSearchSeconds` | `20` | The largest `max_time` a request may use (a larger value is lowered and the answer says so in `engine_info.limits`). The plugin's own default is 10. |
 | `OriginTimeoutSeconds`, `OriginMarginSeconds` | `95`, `10` | How long the proxy in front waits (Cloudflare: 100 s on the free plan) and the time a request needs besides queueing and searching. At start the server checks that `MaxSearchSeconds + QueueWaitMs + OriginMarginSeconds` stays **below** `OriginTimeoutSeconds` and refuses to start otherwise, with the numbers. `OriginTimeoutSeconds=0`: no proxy with a time limit. |
 | `WarmUp` | `true` | Before the first connection is accepted, run an opening and an endgame on every worker (JIT, first touch of each worker's tables). It takes a few seconds and creates all worker contexts at once (the memory of section 9 is used from the start). |
+| `Access:PluginReservedShare` | `0.25` | The share of the workers that only the plugin (an API key) may use; web and anonymous work together never take them (rounded down; nothing is reserved with a single worker). A plugin request waits only for a search of its own class that is already running. |
+| `Access:AnonymousMaxShare` | `0.25` | The most workers visitors who are not logged in may hold at once (rounded down, at least one). |
+| `Access:AnonymousQueueLimit`, `AnonymousQueueWaitSeconds` | `16`, `10` | Anonymous requests waiting for a worker: more are answered `503 busy` with `Retry-After` at once; one that waits longer than this is answered busy. |
+| `Access:AnonymousMaxDepth`, `AnonymousMaxSeconds` | `8`, `3` | The search an anonymous request gets at most (its `max_depth` / `max_time` are lowered). |
+| `Access:AnonymousRatePerMinute`, `AnonymousBurst`, `AnonymousMaxInFlight` | `30`, `10`, `2` | Per REAL client address (after the trusted-proxy rule) for anonymous work. |
+| `Security:Sessions:LifetimeHours`, `MaxPerKey` | `12`, `20` | How long a web session lasts, and how many one key may have (the oldest is ended). Sessions live in memory: a restart logs everybody out. |
+| `Security:Sessions:LoginAttemptsPerMinute`, `LoginBurst` | `6`, `5` | Login attempts per real address: five at once, then six a minute (a failed and a successful attempt count the same). Over the limit: `429` with `Retry-After`. |
+| `Security:Sessions:AuditLogFile` | `audit.jsonl` | One JSON line per login, logout and throttled attempt: time, real address, outcome, key id on success. Never a key, never a session id. Relative to the application folder; empty switches the file off. Back it up with the logs; it grows by a line per attempt. |
 | `Security:TrustedProxies:UseCloudflareRanges` | `false` | Believe `CF-Connecting-IP` from the peers listed in `cloudflare-ips.txt` (next to the program; section 5a). |
 | `Security:TrustedProxies:TrustLoopback` | `false` | Believe the header from this machine: a `cloudflared` tunnel or a reverse proxy that runs here. |
 | `Security:TrustedProxies:Cidrs`, `CidrFile`, `ClientIpHeader` | none, `cloudflare-ips.txt`, `CF-Connecting-IP` | More trusted proxies (CIDRs or addresses), the range file, and the header that carries the client address. |
@@ -116,6 +124,16 @@ let win-acme's scheduled task renew it. The server reads the certificate at star
 **Behind IIS / nginx / Caddy:** let the proxy terminate TLS and forward to `http://127.0.0.1:5000`; keep `Host` loopback, or set `Security:BehindTlsProxy=true` for another interface. Forward the `Authorization` header, allow response streaming for `/v1/live`
 (disable response buffering, long read timeout), and do **not** publish `/admin/*`.
 
+## 4a. Who may do what: access classes, the web login
+
+Three classes of caller share the workers (decision A-27; details in API.md section 5.5):
+
+* **plugin** -- an API key in `Authorization` / `X-Api-Key`. Highest priority; a share of the workers (`Access:PluginReservedShare`, 25 % by default) is reserved for it, so web and anonymous work can never delay a game. With 16 workers: 4 reserved.
+* **web** -- a browser that logged in with the same key: `POST /v1/session` exchanges the key for an HttpOnly, SameSite=Strict (Secure behind TLS) cookie. The key is not stored in the browser, not logged and not put in the cookie; the server keeps only a hash of the session id. Logout, expiry (12 h), revocation of the key and a restart end the session. The cookie is accepted on the game logs, the stream and `/v1/me` only, never on `/ai_move`.
+* **anonymous** -- nobody. Read-only pages today; game coaching (8D) later. At most 25 % of the workers (4 of 16) at a time, its own queue of 16, a smaller search (depth 8, 3 s), a rate limit per real client address.
+
+Give out one key per user (`keys add`); the web login needs no further setup. Revoking the key (`keys revoke`) ends its web sessions within a second. Watch `GET /health` (`classes`: running, queued, served, busy answers per class) and `/admin/status` (the number of sessions); the login audit is `audit.jsonl`.
+
 ## 5a. Cloudflare in front (recommended)
 
 Cloudflare absorbs floods, hides the origin address and terminates the browser's TLS. The server is built for it (decision A-27); what you configure:
@@ -130,7 +148,8 @@ Cloudflare absorbs floods, hides the origin address and terminates the browser's
 6. **The event stream** (`/v1/live`, Server-Sent Events) passes through Cloudflare unbuffered. The server sends a heartbeat comment every 20 seconds (`Live:HeartbeatSeconds`), well below the 100 second idle limit, and a browser that loses the connection reconnects after 3 seconds with `Last-Event-ID` and receives what it missed (API.md section 5.3).
 7. **WAF (optional, in the dashboard — the server has no CAPTCHA or bot code):** a rate-limit rule such as `POST /v1/session` 10 per minute per IP, and `/ai_move` a few hundred per minute per IP; *Bot Fight Mode*; a custom rule that blocks the URI path `/admin`.
 8. **Never expose `/admin/*`.** The operator endpoints answer only a caller on this machine that no proxy handled: a request carrying any of `CF-Connecting-IP`, `CF-Ray`, `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `Via` and the other proxy headers is refused with 403 even when it arrives from loopback (that is what a tunnel looks like).
-9. **Refreshing the ranges.** Cloudflare publishes them at <https://www.cloudflare.com/ips-v4> and <https://www.cloudflare.com/ips-v6> and announces changes in advance. A few times a year: `python toolsefresh_cloudflare_ips.py C:	tc\server\cloudflare-ips.txt`, then restart the service (the file is read at start; a missing or empty file stops the start). A tunnel needs no ranges.
+9. **Refreshing the ranges.** Cloudflare publishes them at <https://www.cloudflare.com/ips-v4> and <https://www.cloudflare.com/ips-v6> and announces changes in advance. A few times a year: `python tools
+efresh_cloudflare_ips.py C:	tc\server\cloudflare-ips.txt`, then restart the service (the file is read at start; a missing or empty file stops the start). A tunnel needs no ranges.
 
 ## 6. Services
 

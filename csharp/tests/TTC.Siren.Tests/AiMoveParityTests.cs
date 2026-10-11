@@ -34,11 +34,11 @@ public class AiMoveParityTests
     internal static AiMoveService CreateService(int workers = 2, int ttEntries = TtEntries) => CreateService(out _, workers, ttEntries);
 
     /// <summary>A service whose worker pool is returned too; <paramref name="time"/> is the clock the pool measures waiting with (a logical clock freezes the aging).</summary>
-    internal static AiMoveService CreateService(out WorkerPool pool, int workers = 2, int ttEntries = TtEntries, TimeProvider? time = null)
+    internal static AiMoveService CreateService(out WorkerPool pool, int workers = 2, int ttEntries = TtEntries, TimeProvider? time = null, CapacityOptions? capacity = null)
     {
         var db = CardDb.LoadFromRepository(AppContext.BaseDirectory);
         var catalog = new CardCatalog(db);
-        pool = new WorkerPool(workers, ttEntries, 1 << 15, 256, 60_000, time: time);
+        pool = new WorkerPool(workers, ttEntries, 1 << 15, 256, 60_000, time: time, capacity: capacity);
         return new AiMoveService(catalog, new SolveService(db), pool, null, ttEntries);
     }
 
