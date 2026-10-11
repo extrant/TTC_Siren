@@ -8,13 +8,7 @@
 *.pfx
 /publish/
 
-# Phase 8B: build output of the tools and of the web UI, and what the web tests leave behind
-/tools/phase8b/TierLoad/bin/
-/tools/phase8b/TierLoad/obj/
-/web/node_modules/
-/web/dist/
-/web/src/generated/
-/web/.generated/
-/web/test-results/
-/web/playwright-report/
-/web/e2e/.tmp/
+# build output of build_exe.bat, build_exe_pypy.bat and build_engine.bat, and the local PyPy
+/dist/
+/build/
+/PYPY/
