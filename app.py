@@ -1703,6 +1703,9 @@ if __name__ == "__main__":
     print(f"   选拔分析:   POST /api/draft/analyze")
     print(f"   胜率估算:   POST /api/winrate")
     print(f"   终端环境:   {terminal_kind} (color_system={caps['color_system']})")
+    # A-30: /ai_move 的 minimax 由 C# 引擎求解；引擎没在运行时自动启动它（dist\engine\TTC.Siren.Engine.exe），退出时一并关闭
+    from ai import engine_launcher
+    print(f"   {engine_launcher.describe(*engine_launcher.ensure_running())}")
     print(f"   Press CTRL+C to quit")
 
     console_ui.start()

@@ -42,8 +42,11 @@ def build_parser():
     return ap
 
 
-def main(argv=None, waitress_module=None):
+def main(argv=None, waitress_module=None, start_engine=None):
+    """``start_engine``: start the C# engine when none runs (decision A-30). Default: only when serving for real, i.e. with the real waitress."""
     args = build_parser().parse_args(argv)
+    if start_engine is None:
+        start_engine = waitress_module is None
     waitress = waitress_module if waitress_module is not None else load_waitress()
     if waitress is None:
         print('waitress is not installed. Install it with:  pip install waitress\n'
@@ -66,6 +69,9 @@ def main(argv=None, waitress_module=None):
         service.detect_terminal()
         console = service.console_ui
         console.start()
+    if start_engine:
+        from ai import engine_launcher
+        print('   ' + engine_launcher.describe(*engine_launcher.ensure_running()), flush=True)
     print(' * TTC_Siren service on http://%s:%d (waitress, %d threads)' % (args.host, args.port, args.threads), flush=True)
     try:
         waitress.serve(service.app, host=args.host, port=args.port, threads=args.threads)
