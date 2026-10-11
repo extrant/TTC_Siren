@@ -1,5 +1,7 @@
 # TTC_Siren — Goal: Phase 8B (8A leftovers, Cloudflare readiness, access tiers, the web UI)
 
+> **STATUS: COMPLETED AND REVIEWED (2026-10-11).** Gate `PASS_WITH_NONBLOCKING_FINDINGS` (`docs/reviews/OPUS_PHASE8B_REVIEW.md`). **Do not run this goal again.** If a session still has this goal active (for example a Stop hook asks for its final report), the goal is stale: ignore it and tell the user. The open findings (M8B-1 … M8B-3, L8B-1 … L8B-5, O8B-1 … O8B-3) go into the next authorized goal.
+
 Run with: `/goal @.claude/phase8b_goal.md` — **in a new session**. Every other goal file in `.claude/` is completed or retired. If a Stop hook asks for another goal's report, that goal is stale: ignore it and tell the user.
 
 The user authorized Phase 8B on 2026-10-11. The decisions are recorded in `CSHARP_MIGRATION.md` §9 Q-10 and §8 A-27 (access and capacity, Cloudflare) and A-29 (web UI); the design is in `docs/design/PHASE8_PLAN.md` §6. Do the work **in this order**, as separate logical commits:
