@@ -21,7 +21,7 @@
 | 5 | 精确残局 + 信息集 robust 残局 + Python-vs-C# 全量 benchmark | **DONE**（2026-10-08，验收见 §7 Phase 5；先行解决了 M4-1/M4-2；benchmark 报告 `docs/reports/PHASE5_BENCHMARK.md`） |
 | 6 | Profiler 驱动优化（单线程）→ 可选 root parallelism | **DONE**；独立审查门禁 **`PASS_WITH_NONBLOCKING_FINDINGS`**（2026-10-10，`docs/reviews/OPUS_PHASE6_REVIEW.md`）（2026-10-10；root parallelism 未授权、未做）— 以下为授权前的审查记录： Phase 5 benchmark 独立审查结论 **`BENCHMARK_VALID_WITH_CAVEATS`**（`docs/reviews/OPUS_PHASE5_BENCHMARK_REVIEW.md`：没有正确性回归；49.7× 是冷 JIT 数字，热态约 110×；精确求解的 263× 不可复现，约 165×）。建议 Phase 6 之前先执行 `.claude/sonnet_review_fix_goal.md`（只修 benchmark 工具与报告），否则 §6 的 Baseline→Compare 不可靠。**整改复审（2026-10-08，审查文档 §12）**：B-1 到 B-5 全部 RESOLVED，结论仍为 `BENCHMARK_VALID_WITH_CAVEATS`，更正后的数字在固定到 P 核的复测中得到确认；新发现 **A-7**（混合架构 CPU 的 P/E 核调度不受控，未固定亲和性时比值可偏高约 1.6–1.7×，C# 自身在 E 核上慢约 1.45×），Phase 6 之前需先执行新的 `.claude/sonnet_review_fix_goal.md`（只含 A-7）。**A-7 复审（2026-10-08，审查文档 §13）**：A-7 RESOLVED（`tools/bench/pin.py` + `run_interleaved.py --affinity`，两边固定在同一 P 核集，独立复测一致），B-1 到 B-5 无回归，结论 `BENCHMARK_VALID_WITH_CAVEATS`；可信范围（对 CPython 3.11.4、两边都在 P 核）：Python 语义搜索 warm 113–118×、cold ≈52–91×（双峰）；robust 流水线 warm 169–180×、cold 109–123×；精确求解 159–176×。**从 benchmark 角度可以开始 Phase 6**（仍需用户明确授权；Phase 6 的所有 Baseline→Compare 必须固定亲和性并记录掩码）。**用户已授权 Phase 6（2026-10-09）**：任务 `.claude/phase6_goal.md`（A：提交并推送 Phase 5 —— 已完成，`b6e4ea4`；B：Q-2/D-004 双边修复 —— 已完成，`a0eb193`，本地；C：Phase 6 的性能工作 —— 已完成，本地）。**Phase 6 状态：DONE，等待独立审查**（见 §7 Phase 6 交付记录与 `docs/reports/PHASE6_OPTIMIZATION.md`）；B、C 的提交未推送，Phase 7 未开始 |
 | 7 | 集成策略：Python 服务调用 C# 引擎（桥接 + 回退） | **用户已授权（2026-10-10）**：任务 `.claude/phase7_goal.md`（A：Phase 6 收尾并推送现有本地提交 → B：Phase 7 集成，提交只在本地）；用户决定：C# 引擎是只监听 127.0.0.1 的独立 HTTP 服务（ASP.NET Core，依赖服务器上安装的 .NET 10 运行时）、请求级并行（引擎内工作线程池，不做 root parallelism）、默认开启并在出错/超时时自动回退 Python、搜索参数沿用 Python（`max_depth`=10、`max_time`=10 s）、部署目标 Windows Server（E5-2698B v3，16 GB）；**DONE**，独立审查门禁 **`PASS_WITH_NONBLOCKING_FINDINGS`**（2026-10-10，`docs/reviews/OPUS_PHASE7_REVIEW.md`）（2026-10-10；验收见 §7 Phase 7；报告 `docs/reports/PHASE7_INTEGRATION.md`、部署 `docs/DEPLOY_WINDOWS.md`；Phase 7 的提交只在本地，未推送；Phase 8 未开始；不自设审查门禁）；**Phase 7 加固已获用户授权（2026-10-10）**：任务 `.claude/phase7_hardening_goal.md`（先推送 Phase 7，再修 M7-1/M7-2/M7-3/L7-1/L7-2/L7-3，并取消自动回退 Python，见 A-20、Q-8）；**Phase 7 加固 DONE**，审查门禁 **`PASS_WITH_NONBLOCKING_FINDINGS`**（2026-10-10，`docs/reviews/OPUS_PHASE7_HARDENING_REVIEW.md`）（2026-10-10；Step A：审查者文件提交 `45a9b28` 并推送 `03b4704..45a9b28`；Step B 加固提交只在本地，未推送；见 §7 Phase 7 加固交付记录与 `docs/reports/PHASE7_HARDENING.md`；不自设审查门禁）；Phase 8 未开始 |
-| 8 | 全量服务移植（请求解析、未知牌采样、MC、分析文案、app.py 子系统、HTTP） | **按用户决定（2026-10-11，Q-9）拆成 8A→8B→8C→8D，逐段授权与审查**，设计见 `docs/design/PHASE8_PLAN.md`。**8A（后端成为产品服务器：/ai_move 原生 C#、解析与采样按原逻辑移植并与 Python 位级一致、MC 下线、解释事实 v2 + 模板文案、对局日志、实时事件流、API 密钥/限流/HTTPS、O8-1 调度）已获授权**：任务 `.claude/phase8a_goal.md`；**已完成（2026-10-11），审查门禁 `PASS_WITH_NONBLOCKING_FINDINGS`（`docs/reviews/OPUS_PHASE8A_REVIEW.md`）**：Step A–D 全部完成，见 §7 Phase 8A 交付记录与 `docs/reports/PHASE8A_REPORT.md`。8B（Web UI：实时求解界面、实战跟随、3D 棋桌与 3D 翻牌、日志回放、看板娘）、8C（牌组优化 + 移植 /api/*）、8D（对局指正、自动复盘报告、残局谜题、看板娘台词库）：未授权 | **（2026-10-11 更新，Q-10）8B 已获用户授权**：任务 `.claude/phase8b_goal.md`（A：提交并推送现有全部提交与看板娘原图；B：修 8A 遗留 M8-1/M8-2/L8-1…L8-4 + Cloudflare 适配；C：访问分级与算力分级（插件密钥最高优先、网页用密钥换会话 Cookie、匿名只读并设上限，A-27）；D：Web UI，中英双语，A-29）；进行中 → 完成后等待独立审查。新增 **8E：NPC 通杀库**（A-28，规划中，未授权）；顺序 8B → 8C → 8D → 8E |
+| 8 | 全量服务移植（请求解析、未知牌采样、MC、分析文案、app.py 子系统、HTTP） | **按用户决定（2026-10-11，Q-9）拆成 8A→8B→8C→8D，逐段授权与审查**，设计见 `docs/design/PHASE8_PLAN.md`。**8A（后端成为产品服务器：/ai_move 原生 C#、解析与采样按原逻辑移植并与 Python 位级一致、MC 下线、解释事实 v2 + 模板文案、对局日志、实时事件流、API 密钥/限流/HTTPS、O8-1 调度）已获授权**：任务 `.claude/phase8a_goal.md`；**已完成（2026-10-11），审查门禁 `PASS_WITH_NONBLOCKING_FINDINGS`（`docs/reviews/OPUS_PHASE8A_REVIEW.md`）**：Step A–D 全部完成，见 §7 Phase 8A 交付记录与 `docs/reports/PHASE8A_REPORT.md`。8B（Web UI：实时求解界面、实战跟随、3D 棋桌与 3D 翻牌、日志回放、看板娘）、8C（牌组优化 + 移植 /api/*）、8D（对局指正、自动复盘报告、残局谜题、看板娘台词库）：未授权 | **（2026-10-11 更新，Q-10）8B 已获用户授权**：任务 `.claude/phase8b_goal.md`（A：提交并推送现有全部提交与看板娘原图；B：修 8A 遗留 M8-1/M8-2/L8-1…L8-4 + Cloudflare 适配；C：访问分级与算力分级（插件密钥最高优先、网页用密钥换会话 Cookie、匿名只读并设上限，A-27）；D：Web UI，中英双语，A-29）；**已完成（2026-10-11），等待独立审查（未设门禁）**：Step A 已推送（`c85481d`、`6d13de5`），Step B–D 的提交只在本地；见 §7 Phase 8B 交付记录与 `docs/reports/PHASE8B_REPORT.md`、`docs/design/WEB_UI.md`。新增 **8E：NPC 通杀库**（A-28，规划中，未授权）；顺序 8B → 8C → 8D → 8E |
 | 9 | 可选：CP-SAT 隐藏牌组合 / deck optimization / scenario generation | NOT STARTED |
 
 **Phase 4 审查门禁（2026-10-07）**：结果 **`BLOCK_PHASE_5`**，报告 `docs/reviews/OPUS_PHASE4_REVIEW.md`。Zobrist（覆盖范围与增量更新）、bound 语义（按原始窗口分类、fail-soft）、同深度复用、被中断的搜索不写表、TT 走法校验、history 都经独立验证为正确：在新种子 golden 上 Phase 4 的 15 个测试全部通过；对抗性用例 1,756 次运行（含 4 项的极小表）与 oracle 0 不一致。唯一的阻塞项是 **H4-1**：TT 表项不带有效上下文（GameState、AI 方、评估模式），公开参数 `clearTable:false` 在换边、切换 aggressive、跨 GameState 共表时会 **静默返回错误分数**（审查探针分别为 6/6、6/6、3/32 错误）。修复任务：`.claude/sonnet_review_fix_goal.md`。复审改为 PASS 之前不得开始 Phase 5。
@@ -817,6 +817,18 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 - **测量（本机 i7-13650HX，P 核 `0xFFF`）**：robust 残局吞吐 825 req/s（8 并发）/930（16）对 Python+引擎 424/402；开局/中局持平；详见报告 §9。
 - **测试**：`dotnet build -c Release --no-incremental` 0 警告 0 错误；`dotnet test` 228/228（此前 155）；`python -m pytest -q` 152 passed（`tests/test_csharp_engine_pool.py` 的并发池测试对时序敏感，在同机 `dotnet test` 之后偶发失败，单独运行通过，与本阶段无关）。
 - **已知限制**：8B/8C/8D 未开始；对手落下第 9 张牌后若插件不再请求，日志看不到该牌；Windows 服务/win-acme/NSSM 步骤已写未执行；负载数字仅限本机。`assets/mascot/raw/*.png`（9 张，约 21 MB）未提交，等用户决定。
+### Phase 8B — 交付记录（2026-10-11；等待独立审查，未设门禁）
+
+提交：Step A（已推送 `45a9b28..6d13de5`（快进，含 8A 的全部提交））`c85481d`（审查文件、A-27…A-29、Q-10、计划 §6、目标文件）、`6d13de5`（看板娘原图，未改动）；Step B `b98051c`（M8-1）、`3dd6898`（M8-2）、`deb1606`（L8-3）、`ccadb43`（L8-2/L8-4，日志 schema 2）、`84a8569`（L8-1）、`6642204`（Cloudflare 适配）、`321bd5d`（启动预热，O8-3）；Step C `6800e34`（访问分级、网页登录、CSRF）、`07899c2`（分级测量）；Step D `6c73a60`（英文解释模板与 `?lang=`）、`e503794`（单页应用托管与 CSP）、`a996286`（发布时构建 UI）、`e4ce52a`（示例对局与其文件）、`web` 提交（UI）与文档提交。B–D 未推送。
+
+- **8A 审查遗留**：M8-1（发布命令无需参数即可成功，`PublishTests`）、M8-2（调度测试改为逻辑时钟与授予序号，不放宽任何断言；`SchedulerTests`/`LiveEventTests`/`AccessClassTests` 共 45 个测试在 20 个满负载燃烧进程下连续 **20/20 通过**）、L8-1/L8-2/L8-3/L8-4（均有测试）、O8-3（预热，实测）。
+- **Cloudflare**：真实客户端地址只信任来自受信代理的头；SSE 心跳 20 s、`Last-Event-ID` 续传、`resync`；`no-store`；源站超时校验（`API.md` §5.3、`DEPLOY_WINDOWS.md` §5a）。
+- **访问分级**（A-27）：插件（密钥）> 网页（会话 Cookie）> 匿名；插件保留 25% 的 worker，匿名最多占 25% 且有独立队列与更低的搜索上限；密钥换会话（HttpOnly、SameSite=Strict、`__Host-`）、登录限流与审计、同源检查。**实测**（3 次，P 核 `0xFFF`，12 worker）：匿名洪水下插件延迟不变（mid 13.6 ms p50 对安静时 14.1 ms；robust 7.2 对 6.9；开局 1,005.5 对 1,005.8），无分级的对照组是 8.4–9.3 s。
+- **Web UI**（A-29）：React + TypeScript + three.js（react-three-fiber）+ Vite，由服务器同源托管（严格 CSP，无 inline/eval）；落地页与演示回放、登录、实时求解、对局日志与回放、设置；每种翻牌原因一种效果；中英双语（英文解释模板与中文有同样的保证）；原创程序化卡面；看板娘 WebP（只补边不裁剪）；2D 降级、窄屏、减少动画。设计与依赖理由见 `docs/design/WEB_UI.md`。首页 104.9 KiB gzip；3D 块（懒加载）235.3 KiB gzip；软件渲染下 3D 约 91 fps、2D 约 177 fps（无真实 GPU 测量）。
+- **未改动**：Python 业务代码（只新增 `tools/` 脚本，并去除 `tests/test_csharp_engine_pool.py` 的时间依赖）；`TTC.Siren.Core`/`TTC.Siren.Search`（`git diff 6d13de5 HEAD` 为空；`Bench` 的 62 条 `SIG` 行与 72 个残局位置与阶段开始时逐字节相同；零分配测试在 373 个测试中通过）。
+- **测试**：`dotnet build -c Release --no-incremental` 0 警告 0 错误；`dotnet test` **373/373**（8A 结束时 228）；`python -m pytest -q` **152 passed**；Vitest **82/82**；Playwright **19/19**（真实服务器、测试密钥库、`TestSeedHeader`、临时日志目录；Edge）。
+- **已知限制**：未做自动化无障碍审计与对比度测量；帧率只在软件渲染下测过；看板娘停靠条在小窗口可能遮住文字（可隐藏）；Windows 服务/win-acme/Cloudflare 控制台步骤写了未执行；8C/8D/8E 未开始，未导出 NPC 数据。
+
 ### Phase 8 — 全量服务移植
 
 范围：ASP.NET Core minimal API 替代 Flask（`/ai_move`、`/search_progress`、`/api/recommend`、`/api/draft/analyze`、`/api/winrate`）；请求解析（D-011）；UnknownCardHandler 与 MC（分布等价 + C# 内部可用种子复现）；文案输出；控制台 UI；单文件发布。
@@ -949,12 +961,19 @@ cProfile（CPython 3.11.4，fixed depth，TT 每次清空）：
 | 2026-10-10 | 7 | 内存（引擎进程，压测后工作集） | worker 1 / 4 / 8 / 12 / 20 | 164 / 461 / 845 / 1,233 / 1,622 MiB | 空闲 50 MiB；每个用过的 worker 约 77 MiB（96 MiB 的表按需触碰）|
 | 2026-10-11 | 8A | `/ai_move` 吞吐（`tools/phase8a/load_server.py`，P 核 `0xFFF`，12 worker，8/16 并发） | robust 残局 req/s | C# 服务器 825/930；Python+引擎 424/402 | 含密钥检查、限流、解释、日志；原始数据 `docs/reports/phase8a/` |
 | 2026-10-11 | 8A | O8-1 探针（1 worker，12 开局+5 廉价） | 廉价请求应答时间 | FIFO 3,664–3,734 ms → 优先级+老化 303–626 ms | `SchedulerTests` |
+| 2026-10-11 | 8B | 访问分级（`tools/phase8b/tier_load.py`，P 核 `0xFFF`，12 worker，3 次独立运行取中位数；匿名洪水约 2.1–2.2 万次请求/次） | 插件请求延迟 p50 / p95 / max（ms）：mid、robust、开局 | 安静 14.1/19.5/155.5、6.9/12.0/17.2、1,005.8/1,011.0/1,011.0；洪水+分级 13.6/17.2/34.7、7.2/9.5/20.0、1,005.5/1,010.6/1,010.6；洪水无分级（对照）8,425/8,949/8,949、8,599/9,016/9,016、9,272/9,791/9,791 | 洪水期间同时运行的匿名搜索最多 3 个，插件排队 0；`docs/reports/phase8b/tiers.*`；单机回环 |
+| 2026-10-11 | 8B | 启动预热（`tools/phase8b/warmup_latency.py`，3 次，中位数） | 就绪时间；首个请求 | 关：0.6 s；开：1.1 s；首个开局请求 1.392 s → 0.637 s，首个 mid 0.030 → 0.018 s，首个 robust 0.031 → 0.018 s | 稳态每分钟中位数相同；`docs/reports/phase8b/warmup_latency.txt` |
+| 2026-10-11 | 8B | M8-2 满负载重复（`tools/phase8b/repeat_under_load.py`，20 个燃烧进程） | 45 个时间相关测试连续运行 | 20/20 通过，每次 13.8–15.3 s | `docs/reports/phase8b/m8-2_scheduler_under_load.txt` |
+| 2026-10-11 | 8B | Bench SIG 对比（`6d13de5` 对最终） | `search 1`、`fast 1` 的 62 行；`endgame` 的 72 个位置 | 逐字节相同（节点数、分数位、走法、分配 0；残局位置同 `same`、场景数相同） | Core/Search 未改 |
+| 2026-10-11 | 8B | UI 包体积（`web/scripts/bundle-sizes.mjs`） | 首页 / 3D 块 / 看板娘 WebP | 345.9 KiB（gzip 104.9）/ 895.8 KiB（gzip 235.3）/ 916 KiB | `docs/reports/phase8b/bundle_sizes.txt` |
+| 2026-10-11 | 8B | UI 帧率（`npm run report`，Edge 无头，软件 WebGL，回放 8 s） | 3D / 2D | 91.3 fps（p50 12.4 ms，p95 16.8 ms）/ 177.3 fps（p50 4.2 ms，p95 8.4 ms） | 无头渲染不按显示器节奏，是吞吐而非流畅度；无真实 GPU；`docs/reports/phase8b/ui_frame_rate.json` |
 | 2026-10-07 | 2 | Python（参考） | `_solve_endgame_exact` 复测 | end5: 217 make / 0.004 s；mid4_rev_ace: 4,707 make / 0.055 s（≈85k make/s） | 与 Phase 1 一致；Python 的 make/s 含 minimax 与 memo 开销，不是纯 make/undo，不可直接比 |
 
 ---
 
 ## 11. 下一步行动
 
+000. **Phase 8B 已完成（2026-10-11），等待独立审查（未设门禁）**，见 §7 Phase 8B、`docs/reports/PHASE8B_REPORT.md`、`docs/design/WEB_UI.md`。下一步由用户决定：(a) 让审查者复核 8B（建议重点：访问分级与会话/CSRF、CSP 与 Cookie、`web/` 的依赖与构建复现、日志 schema 2、英文解释模板、满负载下的时间相关测试）；(b) 推送 B–D 的本地提交；(c) 授权 8C（牌组优化 + 移植 `/api/*`）。8C/8D/8E 未开始。
 00. **Phase 8A 已完成（2026-10-11），审查门禁 `PASS_WITH_NONBLOCKING_FINDINGS`（`docs/reviews/OPUS_PHASE8A_REVIEW.md` §7/§8/§10；建议 8B 第一步先修 M8-1、M8-2、L8-1…L8-4）**，见 §7 Phase 8A、`docs/reports/PHASE8A_REPORT.md`。下一步由用户决定：审查 8A，然后单独授权 8B（Web UI）/8C/8D；9 个看板娘 PNG 是否提交；是否推送本地提交。审查建议：日志中无密钥（含前缀）、O8-1 老化上界、`/v1/games` 的密钥隔离、D-020…D-025 的措辞、事实与文本一致性。
 0a. **Phase 7 加固已完成（2026-10-10），审查门禁 `PASS_WITH_NONBLOCKING_FINDINGS`（`docs/reviews/OPUS_PHASE7_HARDENING_REVIEW.md` §7/§8/§10）**（见 §7 Phase 7 加固交付记录）：审查重点建议为——各条引擎错误路径都不调用 Python 求解器、被替换的测试与新测试的对应关系、过载复现与连接数测试的可信度、连接池在 `threaded=True` 与（未测的）PyPy 下的行为、引擎对已中止排队请求的处理、GC 的实测表、e2e golden 的重新生成。Step B 的提交**未推送**（需要用户另行授权）；Phase 8 未开始。
 0. **Phase 1–7 完成（Phase 7 审查门禁 `PASS_WITH_NONBLOCKING_FINDINGS`，2026-10-10，`docs/reviews/OPUS_PHASE7_REVIEW.md` §7/§9/§10；Phase 6 门禁 `PASS_WITH_NONBLOCKING_FINDINGS`）。** 下一步由用户决定：(a) 让审查者复核 Phase 7（重点：引擎关闭等价的方法与排除项、端到端比较的分类（Q-5 (b)、D-006）、回退矩阵、并发确定性、对共享 C# 代码的小改动 L-1/L-2/L-9 与逐层统计、`ai_server.py` 求解块的原样移动、请求录制的隐私说明）；(b) 是否推送 Phase 7 及之前的本地提交（`a0eb193` 已随 Step A 推送；本地未推送的是 Phase 7 的提交，`3e232ec`…，CLAUDE.md §8：未经授权不推送）；(c) 在 Windows Server 上按 `docs/DEPLOY_WINDOWS.md` 部署并测 worker 数；(d) Phase 8（全量服务移植）与 root parallelism 均**未开始、需要用户明确授权**。
@@ -1212,3 +1231,13 @@ if __name__ == '__main__':
             print(json.dumps(run_server_like(name), ensure_ascii=False), flush=True)
 ```
 （Phase 1 实际运行的版本输出的是 6 位小数的 score，而不是 `score_hex`，其余逻辑相同。）
+
+---
+
+### 12.13 Phase 8B 之后的补充（2026-10-11）
+
+- **UI**：`web/`（`npm ci`、`npm run build`、`npm test`、`npm run e2e`、`npm run report`）；发布时自动构建并放入 `wwwroot`（`-p:SkipWebUi=true` 跳过）；开发时 `npm run dev`（代理到本机服务器）。设计与依赖理由：`docs/design/WEB_UI.md`。
+- **示例对局**：`PluginGameFixtureTests` 由引擎双方对弈生成 `web/src/demo/demo-game.json`（落地页演示）与 `web/e2e/fixtures/plugin-game.json`（浏览器测试里"插件"发的请求）；规则或日志格式变化后用 `TTC_UPDATE_FIXTURES=1` 重写。
+- **Playwright**：使用 Windows 自带的 Edge（`channel: 'msedge'`，不下载浏览器；`E2E_CHANNEL` 可改）；启动真实服务器（临时密钥库，用服务器自己的 `keys add` 建键）。登录按真实地址限流，所以全局设置只登录一次，登录页本身单独测。
+- **测试环境注意**：`python -m pytest` 不要设置 `PYTHONUTF8=1`（`tests/test_engine_overload.py` 解码本地化 `netstat` 输出会失败）；`dotnet test` 输出在中文控制台上可设 `DOTNET_CLI_UI_LANGUAGE=en`。
+- **未做**：8C/8D/8E；自动化无障碍审计；真实 GPU 的帧率；B–D 未推送。
