@@ -119,3 +119,77 @@ Each fact is computed by the engine, is checkable by recomputation, and is rende
 - Improving unknown-card sampling, after 8A gives the measurable baseline.
 - Plugin changes: the plugin is the user's separate project. It needs a server URL, an API key and, ideally, a `gameId`.
 - Q-3 (only one combo level): decide before 8C/8D explanations call it "intended".
+
+## 6. Decisions of 2026-10-11 (after the 8A review; `CSHARP_MIGRATION.md` §9 Q-10, §8 A-27 … A-29)
+
+### 6.1 Access model and capacity (A-27)
+
+The user's position: the web site is for the general public, so the concern is **abuse, queueing and throttling**. Strict authentication matters where the real compute goes: `/ai_move` called by the game plugin during real games. Those requests must get the **highest priority**.
+
+| Who | How they are identified | What they may do | Priority / capacity |
+|---|---|---|---|
+| Game plugin | API key (8A mechanism; **no user accounts**) | `/ai_move`, own game logs, live stream | **highest**; a configurable share of the workers is reserved for it |
+| Web user with a key | logs in **once with the key**; the server answers with an HttpOnly, Secure, SameSite=Strict session cookie; the key is never stored in the browser; logout, expiry, revocation with the key | the real-time solve view, live game follow, own game logs | high (below the plugin) |
+| Anonymous visitor | none; limited by real client IP and browser session | **read-only** pages (landing, demo replay, later the NPC library); **game coaching** (8D: places cards, gets advice) within anonymous limits | lowest; at most a configurable share of workers (for example 25 %), capped depth and time, per-IP rate limits, a global anonymous queue cap ("try again later" when full) |
+
+**Cloudflare in front** (the user's choice for DDoS and bot protection):
+- The real client IP comes from `CF-Connecting-IP`. This header is trusted **only** from configured proxies (Cloudflare's published ranges, or loopback when `cloudflared` runs locally).
+- SSE needs heartbeats well below Cloudflare's idle timeout.
+- `/ai_move` and `/v1/*` must not be cached.
+- Responses must finish within Cloudflare's origin timeout (100 s on the free plan), so `max_time` + queue wait + margin stays below it.
+- The operator endpoints must refuse any request that carries Cloudflare or proxy headers. With a local `cloudflared`, requests arrive from loopback.
+
+### 6.2 8B scope (authorized; `.claude/phase8b_goal.md`)
+
+8B covers:
+- the 8A leftovers (M8-1, M8-2, L8-1 … L8-4);
+- Cloudflare readiness;
+- the access tiers and capacity classes (backend);
+- web login with a key;
+- the web UI:
+  - landing page;
+  - real-time solve view with live game follow;
+  - 3D table with 3D flips per cause (2D fallback);
+  - game-log viewer with timeline and replay;
+  - mascot dock;
+  - **Chinese and English** (UI chrome, plus English explanation templates);
+  - deep-sea dark theme, desktop first, simplified 2D on phones.
+
+**Not in 8B:** coaching, post-game report and puzzles (8D); deck optimisation (8C); the NPC library (8E).
+
+### 6.3 8E — NPC "full clear" library (A-28; planned, not authorized)
+
+**Game data findings** (EXDViewer on the user's machine, game data version 2026.09.15).
+
+Sheets:
+- `TripleTriad`: per NPC, `TripleTriadCardFixed[5]`, `TripleTriadCardVariable[5]`, `TripleTriadRule[2]`, `UsesRegionalRules`, fee, rewards.
+- `TripleTriadRule`: 15 rules.
+- `TripleTriadResident`: card order.
+- NPC names and places come through `ENpcBase` and `Level`, which link to `TripleTriad`.
+
+Counts:
+- **144 NPCs** with cards.
+- Fixed cards per NPC: 1–5 (mostly 3). Variable cards: 0–5 (mostly 4–5). A typical NPC therefore has about 10 possible hands.
+- Open rules: **9 NPCs** have 全明牌, **21** have 三明牌, **114 hide their hand**.
+- NPC rules: 加算 46, 同数 31, 交换 24, 混乱 22, 三明牌 21, 天选 20, 王牌杀手 14, 同类强化 10, 全明牌 9, 同类弱化 7, 秩序 6, 逆转 6, 不胜不休 3, 随机 2.
+- **Regional rules ("流行规则")**:
+  - The game's guide text says they change **daily per region**, with at most two, and each region has its own tendencies.
+  - They are server-side, **not in the client data**.
+  - **46 NPCs** use them.
+
+**Decisions:**
+- **Data:** exported from the game sheets into `data/` (and re-exported after game updates). The library is not built from the plugin's `npcIds`.
+- **Regional rules:** the plugin reports the day's regional rules. The server computes "NPC + today's rules" on demand and caches it. The other NPCs are precomputed offline.
+- **Rules the engine does not support:** 交换, 天选, 不胜不休, 随机 (43 NPCs). These NPCs are marked **unsupported** for now; there is no new rule work.
+- **What "full clear" means:**
+  - The engine's own deterministic policy (which does not look at the NPC's hidden hand) must **win against every possible NPC hand and every NPC reply, for both first movers**. This is proven by exhaustive enumeration over the NPC's choices with our policy fixed.
+  - With 全明牌 the exact game value is used directly.
+  - When no deck achieves a full clear, report the guaranteed-win share, the not-lose share and the lowest-risk deck.
+- **Scope of precomputation:**
+  - offline, the best / full-clear decks from the whole card database, plus the first move for every opening;
+  - a user's own deck is computed on demand and cached in a database;
+  - later moves of a game are answered live by the engine (milliseconds), so no full move tree is stored.
+
+### 6.4 Updated order
+
+8B (UI + leftovers + access tiers) → 8C (deck optimisation, port of `/api/*`) → 8D (coaching, also for anonymous visitors within limits; post-game report; puzzles; mascot lines) → 8E (NPC full-clear library). Each step is authorized separately.
