@@ -279,7 +279,7 @@ public sealed class ServerHost
                 string path = ctx.Request.Path.Value ?? "/";
                 bool api = path.StartsWith("/v1/", StringComparison.Ordinal) || path.StartsWith("/api/", StringComparison.Ordinal) || path.StartsWith("/admin/", StringComparison.Ordinal) ||
                            path == "/ai_move" || path.StartsWith("/ai_move/", StringComparison.Ordinal) || path == "/health" || path == "/v1" || path == "/api" || path == "/admin";
-                if (!HttpMethods.IsGet(ctx.Request.Method) || api || Path.HasExtension(path) || !File.Exists(indexFile))
+                if (!(HttpMethods.IsGet(ctx.Request.Method) || HttpMethods.IsHead(ctx.Request.Method)) || api || Path.HasExtension(path) || !File.Exists(indexFile))
                 {
                     ctx.Response.StatusCode = 404;
                     ctx.Response.ContentType = "application/json";

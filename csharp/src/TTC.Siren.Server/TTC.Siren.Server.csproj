@@ -38,4 +38,24 @@
     </ItemGroup>
   </Target>
 
+  <!-- Phase 8B: the web UI (web/, React + TypeScript + Vite) is built and published as wwwroot next to the program, where the server finds it by itself.
+       It needs Node 22 and npm (docs/DEPLOY_WINDOWS.md section 2a). On a build machine without Node, or to publish the API alone: dotnet publish ... -p:SkipWebUi=true.
+       Only a publish builds it; a plain build and the tests do not. The dependencies are installed (npm ci, from the lock file) only when web/node_modules is missing. -->
+  <PropertyGroup>
+    <WebDir>$([MSBuild]::EnsureTrailingSlash('$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\web'))'))</WebDir>
+  </PropertyGroup>
+
+  <Target Name="BuildWebUi" Condition="'$(SkipWebUi)' != 'true'">
+    <Error Condition="!Exists('$(WebDir)package.json')" Text="The web UI was not found at $(WebDir). Publish the API alone with -p:SkipWebUi=true." />
+    <Exec Condition="!Exists('$(WebDir)node_modules')" WorkingDirectory="$(WebDir)" Command="npm ci --no-audit --no-fund" />
+    <Exec WorkingDirectory="$(WebDir)" Command="npm run build" />
+  </Target>
+
+  <Target Name="AddWebUiToPublish" AfterTargets="ComputeResolvedFilesToPublishList" DependsOnTargets="BuildWebUi" Condition="'$(SkipWebUi)' != 'true'">
+    <ItemGroup>
+      <_WebUiFile Include="$(WebDir)dist\**\*" />
+      <ResolvedFileToPublish Include="@(_WebUiFile)" RelativePath="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
 </Project>

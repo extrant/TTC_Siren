@@ -71,10 +71,30 @@ public sealed class PublishTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_out, "TTC.Siren.Server.exe")));
         Assert.True(File.Exists(Path.Combine(_out, "cloudflare-ips.txt")), "the Cloudflare range file is published next to the program");
 
+        // Phase 8B: the web UI is built and shipped as wwwroot, where the server looks for it; hashed assets, no source maps, nothing of the project's tooling
+        string index = File.ReadAllText(Path.Combine(_out, "wwwroot", "index.html"));
+        Assert.Contains("<div id=\"root\">", index);
+        Assert.DoesNotContain("<script>", index); // no inline script: the strict content security policy would refuse it
+        var assets = Directory.GetFiles(Path.Combine(_out, "wwwroot", "assets"));
+        Assert.Contains(assets, a => Path.GetFileName(a).StartsWith("index-", StringComparison.Ordinal) && a.EndsWith(".js", StringComparison.Ordinal));
+        Assert.Contains(assets, a => Path.GetFileName(a).StartsWith("Board3D-", StringComparison.Ordinal));
+        Assert.DoesNotContain(assets, a => a.EndsWith(".map", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(Path.Combine(_out, "wwwroot", "node_modules")));
+        Assert.False(File.Exists(Path.Combine(_out, "wwwroot", "package.json")));
+
         // the GC choice of Phase 7 hardening (L7-1) is in the published runtime configuration
         using var runtime = JsonDocument.Parse(File.ReadAllText(Path.Combine(_out, "TTC.Siren.Server.runtimeconfig.json")));
         var configProperties = runtime.RootElement.GetProperty("runtimeOptions").GetProperty("configProperties");
         Assert.True(configProperties.GetProperty("System.GC.Server").GetBoolean());
         Assert.False(configProperties.GetProperty("System.GC.Concurrent").GetBoolean());
+    }
+
+    [Fact]
+    public void The_api_alone_can_be_published_without_node()
+    {
+        var (exit, output) = RunDotnet(new[] { "publish", Path.Combine("csharp", "src", "TTC.Siren.Server"), "-c", "Release", "-o", _out, "-p:SkipWebUi=true" });
+        Assert.True(exit == 0, "dotnet publish -p:SkipWebUi=true failed:\n" + output);
+        Assert.True(File.Exists(Path.Combine(_out, "TTC.Siren.Server.dll")));
+        Assert.False(Directory.Exists(Path.Combine(_out, "wwwroot")), "with SkipWebUi no web UI is shipped");
     }
 }
