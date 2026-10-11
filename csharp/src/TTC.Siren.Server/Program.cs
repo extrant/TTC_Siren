@@ -40,6 +40,12 @@ catch (ArgumentException e)
 }
 
 var host = ServerHost.Create(options);
+if (options.WarmUp)
+{
+    // before the first connection is accepted: the JIT and the tables of every worker are ready when the first user asks (review O8-3)
+    var warm = await host.WarmUpAsync();
+    Console.WriteLine($"warm-up: {warm.Searches} searches on {warm.Workers} workers in {warm.Milliseconds:N0} ms ({warm.NodesSearched:N0} nodes)");
+}
 await host.StartAsync();
 Console.WriteLine($"TTC.Siren.Server listening on {host.BaseUrl} {host.HttpsUrl}; workers={options.Workers}, queue={options.QueueLimit}, queue wait={options.QueueWaitMs} ms, " +
                   $"tt entries={options.TtEntries:N0}; card database sha256={host.CardDbSha256}");

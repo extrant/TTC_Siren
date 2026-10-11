@@ -56,6 +56,9 @@ public sealed class ServerOptions
     /// <summary>The time a request needs besides queueing and searching: reading, the explanation, the robust endgame, writing, the network.</summary>
     public double OriginMarginSeconds { get; set; } = 10;
 
+    /// <summary>Run one search on every worker before the first request (JIT and the first touch of each worker's tables), so the first minute after a restart is not slow (review O8-3).</summary>
+    public bool WarmUp { get; set; } = true;
+
     /// <summary>The live event stream (<c>Server:Live</c>).</summary>
     public Live.LiveOptions Live { get; set; } = new();
 

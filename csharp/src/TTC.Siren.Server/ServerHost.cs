@@ -446,6 +446,9 @@ public sealed class ServerHost
         return BitConverter.ToUInt64(bytes);
     }
 
+    /// <summary>Runs the warm-up (see <see cref="WarmUp"/>) on every worker. <c>Program</c> calls it before the server starts listening when <c>Server:WarmUp</c> is on.</summary>
+    public Task<WarmUpReport> WarmUpAsync(CancellationToken ct = default) => WarmUp.RunAsync(Ai, Pool, Ai.Catalog.Db, ct: ct);
+
     public async Task StartAsync(CancellationToken ct = default)
     {
         await _app.StartAsync(ct).ConfigureAwait(false);
