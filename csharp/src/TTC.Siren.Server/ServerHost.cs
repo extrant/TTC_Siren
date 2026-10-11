@@ -59,6 +59,14 @@ public sealed class ServerHost
 {
     public const int MaxBodyBytes = 1 << 20;
 
+    /// <summary>
+    /// The Content-Security-Policy of the web UI (decision A-29): scripts and styles only from our own files -- no inline script, no eval, no inline style element --,
+    /// images from our files and data: URLs, requests only to ourselves, nothing embeddable, no plug-ins, no <c>base</c> tag.
+    /// </summary>
+    public const string WebCsp =
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
     private readonly WebApplication _app;
 
     private ServerHost(WebApplication app, ServerOptions options, AiMoveService ai, WorkerPool pool, string cardDbSha256, GameLogService gameLog, ApiKeyStore? keys,
@@ -236,9 +244,11 @@ public sealed class ServerHost
             await next().ConfigureAwait(false);
         });
 
-        if (options.StaticDirectory is { } staticDir && Directory.Exists(staticDir))
+        // the web UI: Server:StaticDirectory, else the folder 'wwwroot' next to the program (where the publish puts it), else a placeholder page
+        string? webRoot = options.StaticDirectory is { } configured ? configured : Directory.Exists(Path.Combine(AppContext.BaseDirectory, "wwwroot")) ? Path.Combine(AppContext.BaseDirectory, "wwwroot") : null;
+        if (webRoot is not null && Directory.Exists(webRoot))
         {
-            var files = new PhysicalFileProvider(Path.GetFullPath(staticDir));
+            var files = new PhysicalFileProvider(Path.GetFullPath(webRoot));
             app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = files });
             app.UseStaticFiles(new StaticFileOptions
             {
@@ -246,7 +256,7 @@ public sealed class ServerHost
                 OnPrepareResponse = c =>
                 {
                     var h = c.Context.Response.Headers;
-                    h["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'";
+                    h["Content-Security-Policy"] = WebCsp;
                     // files under /assets/ have a content hash in their name (the build writes them so): they never change, cache them for a year;
                     // everything else (index.html) is revalidated each time, so a new release is picked up
                     h["Cache-Control"] = c.Context.Request.Path.StartsWithSegments("/assets") ? "public, max-age=31536000, immutable" : "no-cache";
@@ -257,6 +267,30 @@ public sealed class ServerHost
         {
             app.MapGet("/", () => Results.Content(
                 Placeholder.Html(version, pool.Workers, pool.Idle, Stopwatch.GetElapsedTime(started).TotalSeconds), "text/html; charset=utf-8"));
+        }
+
+        // single-page application: a path of the UI (/live, /games/g-123 ...) that is not a file answers with the page, so a reload or a link works.
+        // The paths of the API and of the operator never do: an unknown one is a 404 in JSON, not a page.
+        if (webRoot is not null && Directory.Exists(webRoot))
+        {
+            var indexFile = Path.Combine(Path.GetFullPath(webRoot), "index.html");
+            app.MapFallback(async ctx =>
+            {
+                string path = ctx.Request.Path.Value ?? "/";
+                bool api = path.StartsWith("/v1/", StringComparison.Ordinal) || path.StartsWith("/api/", StringComparison.Ordinal) || path.StartsWith("/admin/", StringComparison.Ordinal) ||
+                           path == "/ai_move" || path.StartsWith("/ai_move/", StringComparison.Ordinal) || path == "/health" || path == "/v1" || path == "/api" || path == "/admin";
+                if (!HttpMethods.IsGet(ctx.Request.Method) || api || Path.HasExtension(path) || !File.Exists(indexFile))
+                {
+                    ctx.Response.StatusCode = 404;
+                    ctx.Response.ContentType = "application/json";
+                    await ctx.Response.WriteAsync("{\"error\":\"not found\"}\n").ConfigureAwait(false);
+                    return;
+                }
+                ctx.Response.ContentType = "text/html; charset=utf-8";
+                ctx.Response.Headers["Content-Security-Policy"] = WebCsp;
+                ctx.Response.Headers["Cache-Control"] = "no-cache";
+                await ctx.Response.SendFileAsync(indexFile).ConfigureAwait(false);
+            });
         }
 
         // ---- admission: who is it -- an API key in a header (the plugin, or any program), or, on the endpoints that accept it, the session cookie of the web login --

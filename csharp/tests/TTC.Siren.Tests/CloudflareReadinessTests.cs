@@ -250,7 +250,8 @@ public sealed class CloudflareReadinessTests : IDisposable
         Assert.Equal("no-store", await CacheControl(Get("/v1/games/does-not-exist/download")));
         Assert.Equal("no-store", await CacheControl(Get("/admin/status")));
         Assert.Equal("no-store", await CacheControl(Get("/api/winrate")));     // not a GET route: 405, still not cacheable
-        Assert.Equal("no-store", await CacheControl(Get("/nothing-here")));
+        Assert.Equal("no-store", await CacheControl(Get("/v1/nothing-here")));    // an unknown API path: a JSON 404, not a page
+        Assert.Equal("no-cache", await CacheControl(Get("/nothing-here")));       // an unknown path of the UI: the page itself (the UI shows its own not-found view)
         Assert.Equal("no-store", await CacheControl(new HttpRequestMessage(HttpMethod.Post, host.BaseUrl + "/ai_move") { Content = new StringContent("{", Encoding.UTF8, "application/json") }));
         Assert.Equal("no-store", await CacheControl(new HttpRequestMessage(HttpMethod.Post, host.BaseUrl + "/ai_move") { Content = new StringContent(new string(' ', 2 << 20), Encoding.UTF8, "application/json") })); // 413
         Assert.Equal("no-store", await CacheControl(new HttpRequestMessage(HttpMethod.Post, host.BaseUrl + "/api/recommend") { Content = new StringContent("{}", Encoding.UTF8, "application/json") }));
