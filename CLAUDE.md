@@ -85,17 +85,12 @@ csharp/                      C# 解决方案根目录
   src/TTC.Siren.Core/        卡牌数据、规则、GameState、MakeMove/UndoMove
   src/TTC.Siren.Search/      评估、排序、Minimax/AlphaBeta/ID、TT、残局
   src/TTC.Siren.Bench/       benchmark 控制台
-  src/TTC.Siren.Engine/      引擎库 + 本机 HTTP 引擎服务（Phase 7；ASP.NET Core，只监听 127.0.0.1；工作线程池与求解服务 `SolveService` 在此，Server 项目在进程内复用；A-20：出错不再回退 Python）
-  src/TTC.Siren.Compat/      Phase 8A：与 Python 兼容的请求层——CPython 兼容随机数 `PythonRandom`（MT19937）、Python 对象模型（`Legacy*`，只用于请求期兼容层，不在搜索热路径）、请求解析、未知牌采样（`UnknownCardHandler`）、旧版分析文案（`LegacyAnalysis`）、`PyJson`
-  src/TTC.Siren.Explain/     Phase 8A：解释事实 v2（翻牌原因、暴露、主变例、备选、残局、未知牌、可信度）与中文模板文案（模板是数据文件）
-  src/TTC.Siren.Server/      Phase 8A：产品服务器（ASP.NET Core）：原生 `/ai_move`、对局日志、实时事件（SSE）、API 密钥/限流/HTTPS/CORS、`/api/*` 代理、占位页
+  src/TTC.Siren.Engine/      C# 求解引擎（本机 HTTP 服务，ASP.NET Core，只监听 127.0.0.1:5300；工作线程池与求解服务 `SolveService`）。决定 A-30：产品就是 Python 原服务 + 这个引擎，Python 服务启动时自动拉起它（`ai/engine_launcher.py`），`build_engine.bat` 发布到 `dist\engine`；A-20：出错不回退 Python
   tests/TTC.Siren.Tests/     xUnit 单元测试 + parity 测试
-web/                         Phase 8B：Web UI（React + TypeScript + three.js/react-three-fiber，Vite；源码 `src/`，Vitest 单元测试，Playwright 端到端 `e2e/`，构建脚本 `scripts/`）；发布时由 Server 项目构建并放进 `wwwroot`（`-p:SkipWebUi=true` 跳过）；设计见 `docs/design/WEB_UI.md`
 tools/parity/                Python 侧 golden 数据生成脚本（只读调用 reference 实现）
 tools/phase7/                Phase 7 的语料、端到端参考、延迟与压测脚本
-tools/phase8b/               Phase 8B 的工具：`repeat_under_load.py`（满负载下重复时间相关测试）、`tier_load.py` + `TierLoad/`（访问分级测量）、`warmup_latency.py`、`hunks.py`（把工作树切成逻辑提交）
-tools/phase8a/               Phase 8A 的 golden 生成器（RNG、解析、采样、端到端、数字格式）、请求语料生成器、HTTP 延迟脚本
 ```
 
 - Python reference 代码不因 C# 迁移而改动；parity 工具只 import Python 模块，不修改它们。
+  唯一例外（决定 A-30，用户 2026-10-12 批准）：服务入口 `app.py` / `serve_waitress.py` 在监听前调用 `ai/engine_launcher.py` 自动拉起 C# 引擎；规则、评估、搜索、采样、选拔等业务逻辑不变。
 - 运行环境：Windows 11，.NET SDK 10.0.401（目标 `net10.0`），CPython 3.11.4。

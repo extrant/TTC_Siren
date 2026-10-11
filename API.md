@@ -102,10 +102,10 @@
   "myOwner": 1,              // int            — 1=蓝方, 2=红方
   "currentPlayer": 1,        // int            — 1=蓝方回合, 2=红方回合, 0=未知
   "rules": "全明牌,加算,同数", // str           — 逗号分隔规则；"全明牌"/"三明牌" 控制明牌模式
-  "solver": "minimax",       // str            — "minimax"；"monte_carlo" 已下线，仍可传，但由 minimax 引擎回答（见下）
+  "solver": "minimax",       // str            — "minimax" 或 "monte_carlo"
   "max_depth": 10,           // int            — Minimax 最大思考深度
   "max_time": 10,            // float          — Minimax 最大思考秒数
-  "mc_simulations": 150,     // int            — 已忽略（蒙特卡洛已下线，仅为兼容旧客户端保留）
+  "mc_simulations": 150,     // int            — 蒙特卡洛模拟次数（仅 monte_carlo 有效）
   "show_search_progress": false  // bool       — 是否返回搜索进度详情
 }
 ```
@@ -122,10 +122,10 @@
 | `myOwner` | int | 是 | `1`=蓝方, `2`=红方 |
 | `currentPlayer` | int | 否 | 当前回合：`1`=蓝方, `2`=红方, `0`=自动推断 |
 | `rules` | str | 否 | 逗号分隔规则，"全明牌"/"三明牌" 控制对手手牌可见度 |
-| `solver` | str | 否 | 求解器类型，默认 `"minimax"`。`"monte_carlo"` 已下线（Phase 8A，决定 A-22）：请求照常被接受，由 minimax 引擎（含精确/信息集残局）回答，响应追加 `solver_used`、`solver_note` |
+| `solver` | str | 否 | 求解器类型，默认 `"minimax"` |
 | `max_depth` | int | 否 | Minimax 最大思考深度，默认 10 |
 | `max_time` | float | 否 | Minimax 最大思考秒数，默认 10 |
-| `mc_simulations` | int | 否 | 已忽略（蒙特卡洛已下线） |
+| `mc_simulations` | int | 否 | 蒙特卡洛模拟次数，默认 150 |
 | `show_search_progress` | bool | 否 | 默认 false，开启后在响应中附加搜索过程数据 |
 
 > **棋盘位置约定：** `pos: [行, 列]`，`[0, 0]` 为左上角，`[2, 2]` 为右下角。
@@ -184,11 +184,6 @@
 | `win_probability` | Object | `current`=当前胜率, `after_move`=落子后胜率, `confidence`=置信度 |
 | `recommendation` | Object | 走法理由 + 3 个备选方案 |
 | `performance_stats` | Object | 搜索性能统计 |
-| `engine` / `engine_info` | str / Object | 恒为 `"csharp"`；`engine_info` 含 `protocol`、`worker`、`robust`（是否运行了信息集残局）、`overridden`（残局层是否改了走法）、`scenarios`、`timings` |
-| `search_progress` / `search_summary` | Object[] / Object | 仅当请求 `show_search_progress` 为真时出现：每完成一层一条（`depth`、`max_depth`、`best_move`、`best_score`、`nodes_searched`、`time_elapsed`、`time_remaining`、`nodes_per_second`、`tt_hit_rate`、`cutoff_rate`、`branching_factor`）与汇总 |
-| `solver_used` / `solver_note` | str | **追加字段**：仅当请求的 `solver` 为 `"monte_carlo"` 时出现；`solver_used` 为 `"minimax"`，`solver_note` 是中文说明 |
-
-> **兼容性约定（Phase 8A）：** 以上所有字段的键名、取值类型与含义都与 Python 版 `ai_server` 在引擎路径上的响应一致（数字按 Python 的浮点写法输出，例如 `1.0`、`0.45`）；新版只会 **追加** 字段，不会改名或删除。无合法走法时返回 `{"move": null, "msg": "无可用动作", "engine": "csharp"}`（HTTP 200）。
 
 ---
 
@@ -525,15 +520,8 @@ POST /api/draft/analyze  {mode: "decks", candidates: [deck1, deck2, deck3], extr
 HTTP 状态码：
 - `200` — 成功
 - `400` — 请求参数不合法
-- `401` — 云端服务器：没有 API 密钥或密钥无效（见 §5.4）
-- `413` — 请求体超过 1 MiB（`{"error": "Request body too large (limit 1048576 bytes)"}`；Phase 8B 之前返回 400）
-- `403` — API 密钥已被吊销
-- `429` — 超过该密钥的速率或并发限制，见响应头 `Retry-After`
 - `500` — 服务器内部错误
-- `502` / `504` — `/api/*`：后端 Python 服务不可达 / 超时
-- `503` — 求解引擎繁忙或拒绝了局面（`engine_error`）
-
-引擎相关错误（A-20：不再回退到 Python 求解）：`{"error": "C# engine: <原因>(<说明>)", "engine": "csharp", "engine_error": "<原因>"}`，HTTP 503（引擎繁忙 `busy`、请求被引擎拒绝 `invalid_request`、引擎内部错误 `engine_error` 等）；`max_depth`/`max_time` 不是数字 → HTTP 400，`engine_error: "unsupported_parameter"`。请求体不是合法 JSON → HTTP 400 `Invalid input data`（Python 版此时返回 500，见 `CSHARP_MIGRATION.md` D-020）。
+- `503` — `/ai_move` 的 minimax 求解由 C# 求解引擎完成（本机 `127.0.0.1:5300`，服务器启动时自动拉起，见 `docs/DEPLOY_WINDOWS.md`）；引擎不可用、繁忙或答复无效时返回 `503`，响应带 `"engine": "csharp"` 与 `"engine_error"`（如 `connection_failed`、`busy`、`timeout`），客户端可稍后重试。成功的 minimax 响应带 `"engine": "csharp"`。`solver: "monte_carlo"` 不使用引擎（Python 原实现）。只有手动设置环境变量 `TTC_CS_ENGINE=off` 才会改用 Python 的 minimax。
 
 常见错误场景：
 
@@ -544,104 +532,3 @@ HTTP 状态码：
 | 玩家可用牌 < 5 张 | `/api/recommend` 返回空 results + process 说明 |
 | NPC 已知牌 < 5 张 | `/api/recommend` 返回空 results + process 说明 |
 | 无合法卡组 | `/api/draft/analyze` 返回空 results + process 说明 |
-
----
-
-## 5. Phase 8A 新增（云端服务器；全部为追加，旧插件无需改动）
-
-### 5.1 `/ai_move` 的新请求参数与响应字段
-
-| 位置 | 字段 | 说明 |
-|---|---|---|
-| 请求 | `gameId` | 可选。字符串，`[A-Za-z0-9_-]`，1–64 位。同一局的所有请求带同一个 id，服务器就把它们归为一局（对局日志、实时事件、复盘用）。不带时服务器按"后继局面"自动推断（同密钥、同规则与颜色、轮到同一方、棋盘上原有的牌都在原位、间隔不超过 15 分钟）；无效的 id 被忽略 |
-| 请求 | `explain` | 可选。`"brief"`（默认）或 `"full"`（额外给出备选走法的评分与劣势原因） |
-| 响应 | `explanation` | `{version: 2, level, language, facts: [...], text: {brief, full}}`。`facts` 是可复算的结构化事实（立即效果与翻牌原因、暴露与威胁、对手最强回应、主变例与预期结果、备选走法、残局信息集、未知牌假设、可信度）；`text.brief` 是一两句话，`text.full` 是分段详述，文字只陈述事实里有的内容。字段说明见 `docs/design/EXPLANATION_FACTS.md`。生成失败时改为 `explanation_error`（走法不受影响） |
-| 响应 | `game_id` | 本次请求归属的对局 id |
-| 响应 | `engine_info.timings.explainMs` | 生成解释用时 |
-| 响应 | `engine_info.limits` | **Phase 8B，仅在服务器压低了请求的上限时出现**：`{"max_time": 20, "requested_max_time": 3600}`（和/或 `"max_depth"`）。服务器把 `max_time` 限制在 `Server:MaxSearchSeconds`（默认 20 秒；插件默认的 10 秒不受影响），因为前面的代理（Cloudflare 免费版 100 秒）放弃之后搜索并不会被打断 |
-
-### 5.2 对局日志
-
-`GET /v1/games?offset=&limit=`（列表）、`GET /v1/games/{id}`（JSON：全部记录）、`GET /v1/games/{id}/download`（JSON Lines 下载）、`DELETE /v1/games/{id}`。每个密钥只能看到自己的对局（别人的对局返回 404）。记录格式见 `docs/design/GAME_LOG_SCHEMA.md`；默认保留 30 天。
-
-**Phase 8B（日志格式版本 2）：** 整数永远写成整数（`4` 而不是 `4.0`）；`request_raw` 是服务器收到的请求原文（成员顺序、数字写法都保持原样，只去掉词法单元之间的空白），所以紧凑的请求体下载回来逐字节相同；`GET /v1/games/{id}` 返回的就是日志文件的各行，不再重新序列化，`schema` 是其中最高的 `v`（版本 1 的旧文件照常读取）。推断出的对手牌（`opponent_move`）多了 `ambiguous` 与 `candidate_ids`：请求里只有四条边没有卡 id，数据库中边相同的卡不止一张时 `ambiguous` 为 `true`，`candidate_ids` 列出全部候选（按数据库顺序），`card_id` 是其中第一张（与 Python 的 `find_card_id_by_stats` 一致）；界面应显示 `card_edges` 而不是只显示 id。
-
-### 5.3 实时事件流
-
-`GET /v1/live[?game_id=<id>]`，Server-Sent Events，只推送该密钥自己的事件：`request.received`（收到请求，含局面）、`search.depth`（每完成一层：深度、评分、最佳走法、节点数、用时）、`robust.progress`（残局信息集开始/结束）、`decision`（走法与简要解释）、`game.updated`（写入日志的记录）、`game.ended`。落后的客户端会丢弃最旧的事件并收到 `lagged` 通知（含丢弃数量），服务器不会因慢客户端而变慢。
-
-**Phase 8B（放在 Cloudflare 之后）：** ① 心跳：每 `Server:Live:HeartbeatSeconds`（默认 **20 秒**，必须小于 Cloudflare 的 100 秒空闲超时）发一行 `: heartbeat` 注释；连接开始时发 `retry: 3000`（浏览器 3 秒后重连）。② 事件 `id:` 现在是**每个密钥自己的序号**（1、2、3 …，服务器重启后从 1 重新开始）。③ **断线续传：** 重连时带 `Last-Event-ID: <最后收到的 id>`（浏览器的 EventSource 自动带；不能设请求头的客户端用 `?last_event_id=`），服务器把错过的事件按顺序补发（每个密钥保留最近 `Server:Live:ReplayEvents` 条、不超过 `ReplayBytes`，无人收听 `ReplayMinutes` 分钟后遗忘）。如果有事件已被淘汰，先收到一条 `resync` 事件：`{"type":"resync","reason":"events_lost","missed":n,"replayed":m}`；如果给的 id 比服务器已发出的还大（服务器重启过，或不是本服务器的 id），收到 `{"reason":"stream_restarted"}`——客户端应重新读取状态（`GET /v1/games`）。④ 所有响应带 `Cache-Control: no-store`（流为 `no-store, no-cache`）。
-
-### 5.4 云端服务器：认证、限流、HTTPS
-
-- **地址：** 云端部署后基地址是 `https://<你的域名>`（不再是 `http://127.0.0.1:5000`）；证书由服务器配置。
-- **API 密钥：** 每个用户一个密钥，由运维用 `TTC.Siren.Server keys add --name <用户>` 生成，**只显示一次**。请求头二选一：`Authorization: Bearer <密钥>` 或 `X-Api-Key: <密钥>`。没有密钥或密钥不对 → `401`（响应头 `WWW-Authenticate: Bearer`）；密钥已吊销 → `403`。`/health` 与首页 `/` 不需要密钥。
-- **限流：** 每个密钥一个令牌桶（每分钟速率 + 突发量）和最大并发请求数；超过时 `429`，body `{"error": "...", "retry_after_seconds": n}`，响应头 `Retry-After: n`。`/v1/live` 另有每个密钥的同时打开流数限制。
-- **`/api/recommend`、`/api/draft/analyze`、`/api/winrate`：** 由云端服务器转发到本机 Python 服务，请求/响应原样，需要同样的密钥；Python 服务不可达返回 `502 {"error": "the Python app is not reachable"}`，超时返回 `504`。其他 `/api/*` 路径不转发（`404`）。
-- **浏览器跨域：** 只允许运维配置的精确来源（没有通配符），预检请求（`OPTIONS`）对其他来源返回 `403`。
-- **隐私：** 对局日志保存在服务器上，按密钥隔离，默认保留 30 天；用户可用自己的密钥下载或删除（§5.2）。服务器的日志里永远不会出现完整密钥。
-
-### 5.5 Phase 8B：网页登录与访问分级
-
-**谁是谁（决定 A-27）。** 没有账号、没有密码。同一个 API 密钥有两种用法，服务器据此把请求分成三个**访问等级**：
-
-| 等级 | 怎么识别 | 能做什么 | 算力 |
-|---|---|---|---|
-| **插件** | 请求头里的 API 密钥（`Authorization: Bearer` 或 `X-Api-Key`） | `/ai_move`、对局日志、实时流、`/v1/me` | **最高优先**；`Server:Access:PluginReservedShare`（默认 25 %）的工作线程只留给它 |
-| **网页** | 用密钥登录一次换来的会话 Cookie | 对局日志、实时流、`/v1/me`、登出 | 次之；与匿名合计不会占用插件预留的线程 |
-| **匿名** | 没有密钥也没有 Cookie | 只读页面（落地页、演示回放）；8D 的对局指导 | 最低；最多占 `AnonymousMaxShare`（默认 25 %）的线程，有自己的短队列、深度与时间上限、按真实 IP 的限流 |
-
-等级按严格优先级调度（插件 > 网页 > 匿名），每一级内部仍按估计代价排序并带老化（O8-1），所以**一级之内不会饿死**；匿名洪水最多把匿名队列填满（再来的收到 `503 busy`，带 `Retry-After`），插件请求只会等同级中已经在跑的搜索。
-
-**每个端点接受什么认证：**
-
-| 端点 | 接受 | 备注 |
-|---|---|---|
-| `POST /ai_move` | **仅 API 密钥** | 带着会话 Cookie 而没有密钥 → `401`。插件契约不变 |
-| `POST /api/recommend`、`/api/draft/analyze`、`/api/winrate` | 仅 API 密钥 | |
-| `GET /v1/games`、`/v1/games/{id}`、`/v1/games/{id}/download` | API 密钥或会话 Cookie | |
-| `DELETE /v1/games/{id}` | API 密钥；或会话 Cookie **加同源检查**（见下） | |
-| `GET /v1/live` | API 密钥或会话 Cookie | |
-| `GET /v1/me` | API 密钥或会话 Cookie | |
-| `POST /v1/session` | 无（密钥在请求体里） | 按真实 IP 限速，写审计日志 |
-| `DELETE /v1/session` | 会话 Cookie + 同源检查（没有 Cookie 时什么也不做，返回 `logged_out:false`） | |
-| `GET /health`、页面、静态文件 | 无 | |
-| `/admin/*` | 本机且没有任何代理头 | 不要发布到公网 |
-
-同时带了密钥和 Cookie 的请求按**密钥**处理（过期的 Cookie 不会妨碍 API 客户端）。
-
-**`POST /v1/session`** 请求体 `{"key": "ttc_…"}`（最大 4 KiB）。成功 `200`：
-
-```json
-{"ok": true, "key": {"id": "k-1a2b3c4d", "name": "alice"}, "expires": "2026-10-12T03:00:00.000Z"}
-```
-
-并设置 Cookie：`ttc_session=<43 个字符的 base64url，即 256 位随机数>; HttpOnly; SameSite=Strict; Path=/; Max-Age=<生存期>`；在 HTTPS 或 `BehindTlsProxy` 下再加 `Secure`，名字变成 `__Host-ttc_session`（浏览器只接受 Secure、无 Domain、`Path=/` 的 `__Host-` Cookie，兄弟子域名无法覆盖它）。**密钥不会出现在响应、Cookie、日志里**；服务器只保存会话 id 的 SHA-256。失败一律 `401 {"error": "login failed"}`（未知、输错、已吊销的密钥说同一句话，不设置 Cookie）；来得太频繁 `429 {"error": "...try again later", "retry_after_seconds": n}` 加 `Retry-After`（每个真实 IP 默认突发 5 次、之后每分钟 6 次；成功和失败都算；节流期间连正确的密钥也要等）；来自别的站点的表单（`Origin` 不是本站）`403`。
-
-**会话的结束：** `DELETE /v1/session`（登出）；到期（`Security:Sessions:LifetimeHours`，默认 12 小时）；密钥被吊销或停用（每次使用都检查，不需要重启，1 秒内生效）；同一密钥超过 `MaxPerKey`（默认 20）个会话时最旧的被结束；服务器重启（会话在内存里，需重新登录）。失效的 Cookie 会得到 `401`，并附带清除它的 `Set-Cookie`。
-
-**CSRF 防护。** Cookie 带 `SameSite=Strict`，此外由 Cookie 认证的**会改变状态**的请求（`DELETE`、`POST`…）必须来自本站自己的页面：`Origin`（没有则 `Referer`）的主机与端口必须等于请求的 `Host`；浏览器若发了 `Sec-Fetch-Site`，必须是 `same-origin`（或 `none`）；三者都缺则拒绝。否则 `403 {"error": "cross-site request refused"}`。用 API 密钥认证的请求不需要这些（没有任何东西会被浏览器自动带上）。CORS 从不返回 `Access-Control-Allow-Credentials`，别的来源拿不到 Cookie。
-
-**`GET /v1/me`：**
-
-```json
-{"authenticated": true, "via": "session", "class": "web",
- "key": {"id": "k-1a2b3c4d", "name": "alice", "created": "...", "rate_per_minute": 120, "burst": 20, "max_in_flight": 4},
- "session": {"created": "...", "expires": "..."}, "server": {"version": "..."}}
-```
-
-`via` 为 `api_key`（此时 `class` 为 `plugin`，`session` 为 `null`）或 `session`。**不会**返回密钥或它的哈希。
-
-**限流。** 网页与插件虽然用同一个密钥（同样的上限），但各有自己的令牌桶和并发计数：浏览器页面的轮询用不掉插件下棋所需的次数。匿名按真实 IP 限速。
-
-**搜索上限。** 匿名请求的 `max_depth` 被降到 `Server:Access:AnonymousMaxDepth`（默认 8），`max_time` 降到 `AnonymousMaxSeconds`（默认 3 秒），响应的 `engine_info.limits` 会说明。8B 没有匿名计算端点；这个等级与上限由 8D 的对局指导使用，已在池与服务层测试。
-
-**`503 busy`** 现在都带 `Retry-After`（匿名 10 秒，其他 5 秒）；`engine_error` 可能是 `queue_full`、`queue_timeout`、`anonymous_queue_full`、`anonymous_queue_timeout`。
-
-
-### 5.6 Phase 8B：解释的语言与网页界面
-
-**`?lang=zh-CN|en`。** 解释（`explanation.text`）由服务器按模板生成，**每一条解释同时带两种语言**：`explanation.texts` 是 `{"zh-CN": {"brief", "full"}, "en": {...}}`，实时事件 `decision` 带 `briefs`（`{"zh-CN": "...", "en": "..."}`）。`/ai_move` 的响应里 `explanation.text` 仍是中文（旧插件不变）；读取时在 `GET /v1/games/{id}`、`GET /v1/games/{id}/download`（不改写，下载的是日志原文）之外的 `GET /v1/games/{id}` 与 `GET /v1/live` 上加 `?lang=en`，被选中的语言文本会换到 `explanation.text` / `brief` 的位置，并把 `explanation.language` 改为所选语言。**不会改写任何数字**，也不动 `facts`；不认识的语言值等于没有传（保持原样）。
-英文模板与中文模板有同样的保证：每个数字都来自事实；没有精确求解出的胜利就不会写"赢"；同样的事实永远生成同样的文字（快照测试）。
-
-**网页界面。** 服务器同源托管 `web/` 构建出的单页应用（`Server:StaticDirectory`，或程序旁边的 `wwwroot`，发布时自动带上，见 `docs/DEPLOY_WINDOWS.md` §2a）：`/`（介绍与演示回放）、`/login`、`/live`、`/games`、`/games/{id}`、`/settings`。不是 API 的、没有扩展名的 `GET`/`HEAD` 路径都返回这一页（`Cache-Control: no-cache`，带严格的 `Content-Security-Policy`），所以刷新与粘贴链接都能用；`/v1/`、`/api/`、`/admin/`、`/ai_move`、`/health` 下不存在的路径仍是 JSON 404。带哈希的静态文件缓存一年（`immutable`）。界面的设计见 `docs/design/WEB_UI.md`。

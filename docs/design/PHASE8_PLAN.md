@@ -1,5 +1,7 @@
 # Phase 8 plan — from bridge to product (8A → 8B → 8C → 8D)
 
+> **SUPERSEDED (2026-10-12, decision A-30).** The user stopped the product direction: the product server, the web UI, API keys, game logs and the live stream (8A, 8B) were removed, and 8C/8D/8E will not be done. The product is again the original Python server, with the C# engine solving the minimax of `/ai_move` (started by the server itself). This plan is kept as a record only; the removed code is in the git history (up to `f5cf200`).
+
 Status: design agreed with the user on 2026-10-11 (`CSHARP_MIGRATION.md` §9 Q-9, §8 A-21 … A-24). Each sub-phase is authorized separately with its own goal file and gets its own independent review. **Only 8A is authorized now** (`.claude/phase8a_goal.md`).
 
 ## 0. Decisions (user, 2026-10-11)
