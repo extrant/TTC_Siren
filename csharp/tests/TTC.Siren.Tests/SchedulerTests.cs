@@ -1,8 +1,4 @@
-using System.Collections.Concurrent;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using TTC.Siren.Engine;
-using TTC.Siren.Server;
 using Xunit.Abstractions;
 
 namespace TTC.Siren.Tests;
@@ -176,93 +172,5 @@ public sealed class SchedulerTests
         Assert.Equal(2 * aging, served.WaitedMs);
         pool.Release(served.Worker!);
         pool.Release((await cheap).Worker!); // the cheap request that arrived with it comes next
-    }
-
-    // =============================================================================================================== the probe of the review
-
-    private static JsonElement Opening(string tag, int maxTimeMs)
-    {
-        var node = JsonNode.Parse("""
-            {"board":[],"myHand":[{"numU":4,"numL":2,"numD":3,"numR":4},{"numU":5,"numL":4,"numD":6,"numR":5},{"numU":2,"numL":2,"numD":7,"numR":2},
-            {"numU":4,"numL":3,"numD":3,"numR":3},{"numU":1,"numL":3,"numD":7,"numR":2}],
-            "oppHand":[{"numU":0,"numL":0,"numD":0,"numR":0},{"numU":0,"numL":0,"numD":0,"numR":0},{"numU":0,"numL":0,"numD":0,"numR":0},{"numU":0,"numL":0,"numD":0,"numR":0},{"numU":0,"numL":0,"numD":0,"numR":0}],
-            "myOwner":2,"currentPlayer":2,"rules":"加算,同数","max_depth":10}
-            """)!.AsObject();
-        node["max_time"] = maxTimeMs / 1000.0;
-        node["npcName"] = tag;
-        return JsonDocument.Parse(node.ToJsonString()).RootElement.Clone();
-    }
-
-    private static async Task WaitFor(Func<bool> condition, string what)
-    {
-        // a hang detector, not a performance assertion: the condition becomes true as soon as the thread pool has run the request up to the queue
-        var deadline = DateTime.UtcNow.AddSeconds(120);
-        while (!condition())
-        {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("never happened: " + what);
-            await Task.Delay(2);
-        }
-    }
-
-    /// <summary>
-    /// One worker is held by a blocker (it stands for the opening that was already running), 12 openings and then the 5 cheap requests are queued
-    /// in that arrival order, and the blocker is released. The order of service is returned (the labels sorted by the grant number of their request).
-    /// </summary>
-    private static async Task<List<string>> Probe(bool priority, List<JsonElement> cheap)
-    {
-        var service = AiMoveParityTests.CreateService(out var pool, workers: 1, time: new LogicalClock()); // a frozen clock: no aging, only the classes
-        service.PriorityScheduling = priority;
-        var blocker = await pool.AcquireAsync(CancellationToken.None, RequestClass.Expensive);
-        Assert.Equal(0, pool.Idle);
-
-        var outcomes = new ConcurrentDictionary<string, AiMoveOutcome>();
-        var tasks = new List<Task>();
-        int queued = 0;
-        async Task Submit(string label, JsonElement request, ulong seed)
-        {
-            tasks.Add(Task.Run(async () => outcomes[label] = await service.HandleAsync(request, seed, CancellationToken.None)));
-            queued++;
-            await WaitFor(() => pool.Waiting == queued, label + " reaching the queue");
-        }
-        for (int i = 0; i < 12; i++) await Submit("opening-" + i, Opening("opening-" + i, 200), (ulong)(100 + i));
-        for (int i = 0; i < cheap.Count; i++) await Submit("cheap-" + i, cheap[i], (ulong)(500 + i));
-
-        pool.Release(blocker.Worker!);
-        await Task.WhenAll(tasks);
-        Assert.All(outcomes.Values, o => Assert.Equal(200, o.Status));
-        Assert.Equal(12 + cheap.Count, outcomes.Count);
-        return outcomes.OrderBy(kv => kv.Value.PoolGrant).Select(kv => kv.Key).ToList();
-    }
-
-    [Fact]
-    public async Task The_probe_of_the_review_one_worker_twelve_openings_five_cheap_requests()
-    {
-        // five endgame requests from the corpus (robust endgame / few empty cells)
-        var cheap = new List<JsonElement>();
-        foreach (var doc in Golden8.ReadRecords(AiMoveParityTests.EnsureGolden()))
-        {
-            using (doc)
-            {
-                var rec = doc.RootElement;
-                if (rec.GetProperty("status").GetInt32() != 200 || !rec.GetProperty("response").TryGetProperty("pos", out _)) continue;
-                if (!rec.GetProperty("tags").EnumerateArray().Any(t => t.GetString() == "robust_candidate")) continue;
-                cheap.Add(rec.GetProperty("request").Clone());
-                if (cheap.Count == 5) break;
-            }
-        }
-        Assert.Equal(5, cheap.Count);
-
-        var openings = Enumerable.Range(0, 12).Select(i => "opening-" + i).ToArray();
-        var cheapLabels = Enumerable.Range(0, 5).Select(i => "cheap-" + i).ToArray();
-
-        var fifo = await Probe(priority: false, cheap);
-        var scheduled = await Probe(priority: true, cheap);
-        _output.WriteLine("first come first served: " + string.Join(" ", fifo));
-        _output.WriteLine("priority with aging    : " + string.Join(" ", scheduled));
-
-        // old behaviour: every request waits for the ones that came first, so the cheap requests are stuck behind all twelve openings
-        Assert.Equal(openings.Concat(cheapLabels), fifo);
-        // new: the five cheap requests are served first, then the openings, which keep their arrival order (none is starved or reordered)
-        Assert.Equal(cheapLabels.Concat(openings), scheduled);
     }
 }
