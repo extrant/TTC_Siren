@@ -391,6 +391,8 @@ public sealed class ServerHost
             return new JsonTextResult(200, PyJson.Serialize(new Dictionary<string, object?> { ["keys"] = keys?.List().Count ?? 0 }));
         });
 
+        if (options.TestSeedHeader) logger.LogWarning("Server:TestSeedHeader is ON: the X-Ttc-Test-Seed header of a local request fixes the sampling seed. This is a test switch and must never be on in production.");
+
         self = new ServerHost(app, options, ai, pool, sha, gameLog, keys);
         return self;
     }
@@ -412,7 +414,9 @@ public sealed class ServerHost
     /// <summary>Production: a fresh 64-bit cryptographic seed per request. The header seed exists for the parity tests only, behind a configuration switch.</summary>
     private static ulong ChooseSeed(ServerOptions options, HttpRequest http)
     {
-        if (options.TestSeedHeader && http.Headers.TryGetValue("X-Ttc-Test-Seed", out var header) && ulong.TryParse(header.ToString(), out ulong seed)) return seed;
+        // the header is believed only from a local caller (review L8-1: and only when the switch was allowed at start, which needs a loopback listener)
+        if (options.TestSeedHeader && http.HttpContext.Connection.RemoteIpAddress is { } peer && IPAddress.IsLoopback(peer) &&
+            http.Headers.TryGetValue("X-Ttc-Test-Seed", out var header) && ulong.TryParse(header.ToString(), out ulong seed)) return seed;
         Span<byte> bytes = stackalloc byte[8];
         RandomNumberGenerator.Fill(bytes);
         return BitConverter.ToUInt64(bytes);

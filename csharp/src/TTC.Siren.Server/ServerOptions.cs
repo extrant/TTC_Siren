@@ -100,6 +100,14 @@ public sealed class ServerOptions
     {
         if (!IPAddress.TryParse(Host, out _)) throw new ArgumentException($"Host '{Host}' is not an IP address");
         if (Port is < 0 or > 65535) throw new ArgumentException($"Port {Port} out of range");
+
+        // review L8-1: the test seed header fixes the sampling seed of a request. It exists for the parity tests, on a machine nobody else can reach.
+        if (TestSeedHeader)
+        {
+            if (!IPAddress.IsLoopback(IPAddress.Parse(Host))) throw new ArgumentException($"TestSeedHeader is a test switch and is refused on {Host}: it is allowed only when the server listens on a loopback address");
+            if (Security.BehindTlsProxy) throw new ArgumentException("TestSeedHeader is a test switch and is refused when the server sits behind a proxy (BehindTlsProxy): the proxy would carry the header from anybody");
+        }
+
         if (Workers < 1) throw new ArgumentException("Workers must be at least 1");
         if (QueueLimit < 0) throw new ArgumentException("QueueLimit must not be negative");
         if (QueueWaitMs < 0) throw new ArgumentException("QueueWaitMs must not be negative");

@@ -63,6 +63,7 @@ Settings come from `appsettings.json` (section `Server`), environment variables 
 | `Security:CorsOrigins` | none | Exact origins that may call from a browser (the web UI), e.g. `["https://app.example.org"]`. No wildcard. |
 | `Security:Https:Enabled`, `Port`, `PfxPath` | off, `443` | HTTPS in Kestrel. The PFX password comes from the environment variable `TTC_PFX_PASSWORD` (or `Security:Https:PfxPassword`; prefer the variable). |
 | `Security:Https:Hsts` | `true` | `Strict-Transport-Security` on HTTPS answers. |
+| `TestSeedHeader` | `false` | **Test switch, never in production.** The server refuses to start with it unless it listens on a loopback address without a proxy in front, and logs a warning when it is on. |
 | `Security:BehindTlsProxy` | `false` | Set to `true` only when a reverse proxy terminates TLS in front of a non-loopback listener. Without HTTPS or this flag the server **refuses to start** on a non-loopback address (keys would travel in clear text). |
 | `Security:AllowLoopbackWithoutKey` | `false` | Development only: callers on 127.0.0.1 need no key (they act as the key `local-dev`). Needs a loopback `Host`. |
 | `Proxy:PythonUrl`, `TimeoutSeconds` | `http://127.0.0.1:5001`, `120` | The Python app behind `/api/*`. A Python app that is down answers 502, a slow one 504. |
