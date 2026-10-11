@@ -37,6 +37,17 @@ is part of the server and its host files are not shipped. (Before Phase 8B the c
 
 Copy `publish\server` to the server, for example `C:\ttc\server`, and `data\幻卡数据库.csv` to `C:\ttc\data\`. Never copy golden data, corpora, game logs or key files from a development machine.
 
+## 2a. The web UI
+
+The publish builds the web UI (`web/`, React + TypeScript + three.js, Vite) and ships it as `publish\server\wwwroot`; the server finds it there by itself (or set `Server:StaticDirectory`). Nothing else is needed at run time: no Node on the server.
+
+* **On the build machine:** Node 22 and npm. `npm ci` runs from `package-lock.json` the first time (only when `web
+ode_modules` is missing), then `npm run build` (data, type check, bundle). `data\幻卡数据库.csv` and `assets\mascotaw\*.png` must be in the checkout (they are inputs of the build: card edges, and the mascot pictures that are padded and converted to WebP).
+* **API only** (no Node on the build machine, or the UI is hosted elsewhere): `dotnet publish csharp\src\TTC.Siren.Server -c Release -o publish\server -p:SkipWebUi=true`. A plain `dotnet build` and the tests never run npm.
+* The page is served with a strict Content-Security-Policy (`script-src 'self'`, no inline script, no `eval`); do **not** add a proxy rule that rewrites or removes it. Behind Cloudflare, cache `/assets/*` (hashed names, `immutable`) and do not cache `/` (the page revalidates, so a new release shows at once).
+* The UI uses the session cookie of the web login (section 4a) and the same-origin API (`/v1/...`); no CORS setting is needed for it. Server-Sent Events (`/v1/live`) must not be buffered by a proxy (section 5a).
+* First look after a deploy: open `https://<name>/`, "See the demo replay" must play; then log in with a key, `/live` must say "Connected".
+
 ## 3. Configuration
 
 Settings come from `appsettings.json` (section `Server`), environment variables (`TTC_Server__Security__Https__Port=443`), and the command line (`--port`, `--workers`, ... ; the command line wins).

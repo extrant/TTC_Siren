@@ -638,3 +638,10 @@ HTTP 状态码：
 
 **`503 busy`** 现在都带 `Retry-After`（匿名 10 秒，其他 5 秒）；`engine_error` 可能是 `queue_full`、`queue_timeout`、`anonymous_queue_full`、`anonymous_queue_timeout`。
 
+
+### 5.6 Phase 8B：解释的语言与网页界面
+
+**`?lang=zh-CN|en`。** 解释（`explanation.text`）由服务器按模板生成，**每一条解释同时带两种语言**：`explanation.texts` 是 `{"zh-CN": {"brief", "full"}, "en": {...}}`，实时事件 `decision` 带 `briefs`（`{"zh-CN": "...", "en": "..."}`）。`/ai_move` 的响应里 `explanation.text` 仍是中文（旧插件不变）；读取时在 `GET /v1/games/{id}`、`GET /v1/games/{id}/download`（不改写，下载的是日志原文）之外的 `GET /v1/games/{id}` 与 `GET /v1/live` 上加 `?lang=en`，被选中的语言文本会换到 `explanation.text` / `brief` 的位置，并把 `explanation.language` 改为所选语言。**不会改写任何数字**，也不动 `facts`；不认识的语言值等于没有传（保持原样）。
+英文模板与中文模板有同样的保证：每个数字都来自事实；没有精确求解出的胜利就不会写"赢"；同样的事实永远生成同样的文字（快照测试）。
+
+**网页界面。** 服务器同源托管 `web/` 构建出的单页应用（`Server:StaticDirectory`，或程序旁边的 `wwwroot`，发布时自动带上，见 `docs/DEPLOY_WINDOWS.md` §2a）：`/`（介绍与演示回放）、`/login`、`/live`、`/games`、`/games/{id}`、`/settings`。不是 API 的、没有扩展名的 `GET`/`HEAD` 路径都返回这一页（`Cache-Control: no-cache`，带严格的 `Content-Security-Policy`），所以刷新与粘贴链接都能用；`/v1/`、`/api/`、`/admin/`、`/ai_move`、`/health` 下不存在的路径仍是 JSON 404。带哈希的静态文件缓存一年（`immutable`）。界面的设计见 `docs/design/WEB_UI.md`。

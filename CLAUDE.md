@@ -90,8 +90,10 @@ csharp/                      C# 解决方案根目录
   src/TTC.Siren.Explain/     Phase 8A：解释事实 v2（翻牌原因、暴露、主变例、备选、残局、未知牌、可信度）与中文模板文案（模板是数据文件）
   src/TTC.Siren.Server/      Phase 8A：产品服务器（ASP.NET Core）：原生 `/ai_move`、对局日志、实时事件（SSE）、API 密钥/限流/HTTPS/CORS、`/api/*` 代理、占位页
   tests/TTC.Siren.Tests/     xUnit 单元测试 + parity 测试
+web/                         Phase 8B：Web UI（React + TypeScript + three.js/react-three-fiber，Vite；源码 `src/`，Vitest 单元测试，Playwright 端到端 `e2e/`，构建脚本 `scripts/`）；发布时由 Server 项目构建并放进 `wwwroot`（`-p:SkipWebUi=true` 跳过）；设计见 `docs/design/WEB_UI.md`
 tools/parity/                Python 侧 golden 数据生成脚本（只读调用 reference 实现）
 tools/phase7/                Phase 7 的语料、端到端参考、延迟与压测脚本
+tools/phase8b/               Phase 8B 的工具：`repeat_under_load.py`（满负载下重复时间相关测试）、`tier_load.py` + `TierLoad/`（访问分级测量）、`warmup_latency.py`、`hunks.py`（把工作树切成逻辑提交）
 tools/phase8a/               Phase 8A 的 golden 生成器（RNG、解析、采样、端到端、数字格式）、请求语料生成器、HTTP 延迟脚本
 ```
 
