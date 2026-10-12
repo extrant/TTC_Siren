@@ -25,8 +25,9 @@ answers 503 `connection_failed`.
 
 | What | How |
 |---|---|
-| Run from the repository | Double-click **`run_local.bat`** (`run_local.bat pypy` for PyPy from `PYPY\pypy3.exe`). The first run builds the engine (`build_engine.bat`, needs the .NET 10 SDK); then it runs `python app.py`, which starts the engine. `run_pypy.bat`, `python app.py` and `serve_waitress.py` start the engine the same way once it is built. |
-| Build the engine only | `build_engine.bat` -> `dist\engine\TTC.Siren.Engine.exe`: one self-contained file (about 50 MB); the machine that runs it needs **no .NET installed**. |
+| Run from the repository | Double-click **`run_local.bat`** (`run_local.bat pypy` for PyPy from `PYPY\pypy3.exe`). The first run builds the engine (`scriptsuild_engine.bat`, needs the .NET 10 SDK); then it runs `python app.py`, which starts the engine. `scriptsun_pypy.bat`, `python app.py` and `serve_waitress.py` start the engine the same way once it is built. |
+| Build the engine only | `scriptsuild_engine.bat` -> `dist\engine\TTC.Siren.Engine.exe`: one self-contained file (about 50 MB); the machine that runs it needs **no .NET installed**. |
+| Build the smallest package to hand out | `scriptsuild_release.bat` -> `distelease\` (`TTC_Siren.exe` + `engine\TTC.Siren.Engine.exe` + `使用说明.txt`) and `dist\TTC_Siren_release.zip`. The recipient unzips it and double-clicks `TTC_Siren.exe`; no Python, no .NET. |
 | Build everything to distribute | `build_all.bat` -> `dist\engine\` (C# engine), `dist\TTC_Siren.exe` (CPython), `dist\TTC_Siren_PYPY\` (PyPy). Zip `dist\`; on the target machine double-click `TTC_Siren.exe` (or `TTC_Siren_PYPY.exe`) as before. |
 
 **How the server starts the engine** (`ai/engine_launcher.py`, called by `app.py` and `serve_waitress.py` before they listen; the start-up banner says what happened):
@@ -36,20 +37,20 @@ answers 503 `connection_failed`.
 3. Otherwise, unless `TTC_CS_ENGINE_AUTOSTART=off` or the URL is not loopback, `TTC.Siren.Engine.exe` is looked for: `TTC_CS_ENGINE_EXE`, then `engine\`, `..\engine\` and
    `dist\engine\` next to the packaged exe and in the repository. It is started on the port of the URL with **the card database this server loads** (`--card-db`), its output
    goes to `engine.log` next to it, and it is tied to the server process (a Windows job object): it ends when the server ends, also when the console window is closed.
-4. Not found -> the banner says `未找到（先运行 build_engine.bat）` and minimax requests of `/ai_move` answer 503 `connection_failed` until an engine runs (A-20: no silent fallback).
+4. Not found -> the banner says `未找到（先运行 scriptsuild_engine.bat）` and minimax requests of `/ai_move` answer 503 `connection_failed` until an engine runs (A-20: no silent fallback).
 
 ## 1. What you need
 
 | Item | Notes |
 |---|---|
 | Windows Server 2016 or newer, x64 | Tested only on Windows 11 here; the engine uses nothing Windows specific except the optional service hosting. |
-| .NET | **Nothing** for the self-contained build of `build_engine.bat`. Only the framework-dependent publish of section 2 needs the "ASP.NET Core Runtime 10.x" (check with `dotnet --list-runtimes`). Building needs the .NET 10 SDK. |
+| .NET | **Nothing** for the self-contained build of `scriptsuild_engine.bat`. Only the framework-dependent publish of section 2 needs the "ASP.NET Core Runtime 10.x" (check with `dotnet --list-runtimes`). Building needs the .NET 10 SDK. |
 | The Python environment of the server | CPython or PyPy; the engine client uses the standard library only. |
 | The card database | The engine and the Python server must load **the same file** `data\幻卡数据库.csv`; the Python side compares SHA-256 hashes at start-up and refuses the engine if they differ. |
 
 ## 2. Build and publish (on a development machine with the .NET 10 SDK)
 
-`build_engine.bat` (self-contained, one file, recommended), or framework-dependent:
+`scriptsuild_engine.bat` (self-contained, one file, recommended), or framework-dependent:
 
 ```
 dotnet publish csharp\src\TTC.Siren.Engine -c Release -o publish\engine
@@ -86,8 +87,8 @@ a search that is already running is never interrupted. Size the wait to the long
 gets 503 `busy`, and a full queue answers 503 `busy` at once.
 
 **Garbage collector.** The engine runs with **Server GC, non-concurrent**, written explicitly in the project file and visible in the published `TTC.Siren.Engine.runtimeconfig.json`
-(`"System.GC.Server": true`, `"System.GC.Concurrent": false`); `/v1/health` reports `serverGc`. It was chosen by measurement (`docs/reports/phase7/gc/gc_table.txt`,
-`docs/reports/PHASE7_HARDENING.md` section 7): equal to workstation GC for openings and mid-games, faster for the very short robust-endgame requests on the P-cores, same memory.
+(`"System.GC.Server": true`, `"System.GC.Concurrent": false`); `/v1/health` reports `serverGc`. It was chosen by measurement (`docs/migration/reports/phase7/gc/gc_table.txt`,
+`docs/migration/reports/PHASE7_HARDENING.md` section 7): equal to workstation GC for openings and mid-games, faster for the very short robust-endgame requests on the P-cores, same memory.
 Server GC keeps one heap per logical CPU it may use; on the 32-thread server that is 32 small heaps, which was not measured there. If memory matters more than throughput,
 `DOTNET_gcServer=0` in the engine's environment switches to workstation GC without a rebuild.
 

@@ -2,7 +2,7 @@
 """
 Table of the Server GC / workstation GC comparison written by tools/phase7/gc_compare.py (review L7-1).
 
-  python tools/phase7/gc_table.py docs/reports/phase7/gc > docs/reports/phase7/gc/gc_table.txt
+  python tools/phase7/gc_table.py docs/migration/reports/phase7/gc > docs/migration/reports/phase7/gc/gc_table.txt
 
 Per CPU set, worker count, category and concurrency: throughput (requests/s) and p95 latency (s) as median [min-max] over the runs for each
 GC mode, the workstation/server ratio of the medians, and the engine's working set after the load. Cells where a run reported errors or

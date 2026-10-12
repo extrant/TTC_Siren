@@ -4,7 +4,7 @@ using TTC.Siren.Search;
 
 namespace TTC.Siren.Engine;
 
-/// <summary>Wire protocol of <c>POST /v1/solve</c> (see docs/reports/PHASE7_INTEGRATION.md for the full description).</summary>
+/// <summary>Wire protocol of <c>POST /v1/solve</c> (see docs/migration/reports/PHASE7_INTEGRATION.md for the full description).</summary>
 public static class Protocol
 {
     /// <summary>Bumped whenever a field is added, removed or changes meaning. The Python client refuses another version.</summary>

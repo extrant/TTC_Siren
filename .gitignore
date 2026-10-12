@@ -8,7 +8,8 @@
 *.pfx
 /publish/
 
-# build output of build_exe.bat, build_exe_pypy.bat and build_engine.bat, and the local PyPy
+# build output of the scripts in scripts\ (PyInstaller writes TTC_Siren.spec on every build), and the local PyPy
 /dist/
 /build/
 /PYPY/
+*.spec

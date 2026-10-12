@@ -2,7 +2,7 @@
 """
 Do the answers depend on the concurrency or on the number of engine workers? (Phase 7, load-test requirement)
 
-  python tools/phase7/determinism_check.py --out docs/reports/phase7/determinism_check.txt
+  python tools/phase7/determinism_check.py --out docs/migration/reports/phase7/determinism_check.txt
 
 For worker counts 1, 8 and 20 it starts the engine, replays the corpus at concurrency 1, 4 and 16 for openings, mid-games and robust
 endgames, and compares every answer with the first answer given to the same request in ANY earlier cell (tools/bench/load_test.py --digests):

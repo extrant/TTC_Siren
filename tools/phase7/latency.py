@@ -2,7 +2,7 @@
 """
 Single-request latency, Python solver vs C# engine, same requests, production settings (max_depth 10, max_time 10 s). Phase 7.
 
-  python tools/phase7/latency.py --affinity auto --runs 3 --out docs/reports/phase7/latency.json
+  python tools/phase7/latency.py --affinity auto --runs 3 --out docs/migration/reports/phase7/latency.json
 
 Protocol (goal 4.6, CLAUDE.md section 6): every independent run starts FRESH processes pinned to the same CPU set (the mask is checked and
 printed): the Python solver (``TTC_CS_ENGINE=off``) in one process, and the engine path in a second process together with a freshly started

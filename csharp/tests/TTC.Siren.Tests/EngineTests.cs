@@ -55,7 +55,7 @@ public sealed class EngineTests : IClassFixture<EngineFixture>
     public void The_engine_runtime_config_states_the_chosen_gc_mode_explicitly()
     {
         // Review L7-1: the project used to set a property MSBuild ignores (ServerGarbageCollector). The measured choice (Server GC,
-        // non-concurrent; docs/reports/phase7/gc) must be what the build writes into the runtimeconfig.json.
+        // non-concurrent; docs/migration/reports/phase7/gc) must be what the build writes into the runtimeconfig.json.
         string engineBin = Path.Combine(GoldenFiles.RepoRoot, "csharp", "src", "TTC.Siren.Engine", "bin");
         var configs = Directory.GetFiles(engineBin, "TTC.Siren.Engine.runtimeconfig.json", SearchOption.AllDirectories);
         Assert.NotEmpty(configs);

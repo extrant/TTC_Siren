@@ -5,7 +5,7 @@ Interleaved A/B of several builds of TTC.Siren.Bench.exe, pinned to one CPU set 
 The builds are run ALTERNATELY, sample by sample (A, B, C, A, B, C, ...), not in blocks. Cold-JIT timings are bimodal and depend on
 tier-up timing, and the machine drifts over minutes, so a block A/B (all runs of A, then all runs of B) can show a 'regression' that
 is only the order: a block comparison of the 22-item cold suite showed +25% for a change that is -2% when the builds alternate
-(docs/reports/PHASE6_OPTIMIZATION.md section 5).
+(docs/migration/reports/PHASE6_OPTIMIZATION.md section 5).
 
   python tools/bench/ab_interleaved.py --mode search --cold --samples 25 --affinity auto name=path/to/Bench.exe name2=path2 ...
 Modes: search (22 fixed-depth items), fast (Fast column), exact (mid3_ascension), endgame (72 positions). Prints min / p25 / median / p75 / max.

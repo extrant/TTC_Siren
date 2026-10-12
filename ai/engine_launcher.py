@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Starts the C# engine (csharp/src/TTC.Siren.Engine) next to the Python server, so that ``python app.py``, ``run_pypy.bat`` and the packaged
+Starts the C# engine (csharp/src/TTC.Siren.Engine) next to the Python server, so that ``python app.py``, ``scripts\\run_pypy.bat`` and the packaged
 ``TTC_Siren.exe`` work as before with one start: the server answers every endpoint itself and hands the minimax search of ``/ai_move`` to the
 engine (decision A-30). Standard library only (the interpreter may be PyPy).
 
@@ -12,7 +12,7 @@ engine (decision A-30). Standard library only (the interpreter may be PyPy).
     again when the server exits. Its output goes to ``engine.log`` next to it.
 
 Where the engine is looked for, first match wins: ``TTC_CS_ENGINE_EXE``; then, from the folder of the packaged executable (when frozen) and
-from the repository root: ``engine\\``, ``..\\engine\\`` and ``dist\\engine\\`` (what ``build_engine.bat`` produces).
+from the repository root: ``engine\\``, ``..\\engine\\`` and ``dist\\engine\\`` (what ``scripts\\build_engine.bat`` produces).
 """
 import atexit
 import json
@@ -162,7 +162,7 @@ def ensure_running(wait_seconds=30.0, popen=subprocess.Popen):
         return 'remote', 'no engine answers at ' + url + ' (only a local engine is started automatically)'
     exe = find_engine_exe()
     if exe is None:
-        return 'missing', 'TTC.Siren.Engine.exe not found (run build_engine.bat); looked in: ' + '; '.join(candidate_paths())
+        return 'missing', 'TTC.Siren.Engine.exe not found (run scripts\\build_engine.bat); looked in: ' + '; '.join(candidate_paths())
 
     port = urllib.parse.urlparse(url).port or 80
     folder = os.path.dirname(os.path.abspath(exe))
@@ -203,7 +203,7 @@ def describe(state, detail):
         'disabled': '未自动启动（TTC_CS_ENGINE_AUTOSTART=off）',
         'running': '已在运行',
         'remote': '未连接（远程地址不会自动启动）',
-        'missing': '未找到（先运行 build_engine.bat）',
+        'missing': '未找到（先运行 scripts\\build_engine.bat）',
         'started': '已启动',
         'failed': '启动失败',
     }.get(state, state)

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/extrant/TTC_Siren/refs/heads/main/ttcicon.png" width="1920" alt="TTC_Siren">
+  <img src="assets/ttcicon.png" width="1920" alt="TTC_Siren">
 </div>
 
 # TTC_Siren
@@ -10,7 +10,7 @@
 
 ## 核心能力
 
-- **Minimax + Alpha-Beta 搜索**：主路径使用迭代加深、置换表、历史启发和走法排序。
+- **Minimax + Alpha-Beta 搜索**：主路径使用迭代加深、置换表、历史启发和走法排序；搜索由 **C# 求解引擎**完成（与 Python 版逐位一致，约快 100 倍），服务启动时自动拉起。
 - **信息集残局求解**：空位较少且未知牌不超过 2 张时，构造多个可能世界并完整搜索到终局。
 - **合法未知牌枚举**：残局优先从全卡库枚举符合当前已知信息的候选，排除已出现卡牌，并应用卡组限制。
 - **隐藏手牌建模**：前中局使用规则相关采样，高风险局面会扩大对手候选池。
@@ -49,23 +49,22 @@
 
 ## 快速开始
 
-### 环境要求
+### 直接使用（发给别人用的版本）
 
-- Python 3.8+
-- Windows / macOS / Linux
-- 依赖：`flask`, `pandas`, `numpy`
+解压发布包（`scripts\build_release.bat` 生成的 `TTC_Siren_release.zip`），双击 `TTC_Siren.exe`。不需要安装 Python 或 .NET。
+服务监听 `http://127.0.0.1:5000`，插件按原来的方式连接即可（无需密钥）；`engine\` 文件夹里的 C# 引擎会被自动启动和关闭，必须和 `TTC_Siren.exe` 放在一起。
 
-### 安装依赖
+### 从源码运行
+
+环境：Windows，Python 3.8+（或 PyPy），构建引擎需要 .NET 10 SDK。
 
 ```bash
 pip install -r requirements.txt
+run_local.bat            # 第一次会先构建 C# 引擎，然后运行 python app.py
 ```
 
-### 启动服务
-
-```bash
-python ai_server.py
-```
+也可以照旧运行 `python app.py`、`python serve_waitress.py` 或 `scripts\run_pypy.bat`：引擎构建过一次（`scripts\build_engine.bat`）之后，服务会自己启动它。
+不想用 C# 引擎时设置环境变量 `TTC_CS_ENGINE=off`（使用原来的 Python 搜索，约慢 100 倍）。
 
 默认监听：
 
@@ -73,59 +72,14 @@ python ai_server.py
 http://127.0.0.1:5000
 ```
 
-启动后，服务端窗口会显示实时搜索速度，例如：
+响应会包含推荐卡牌、落点、胜率估计、对手手牌分析和性能统计。部署与引擎设置见 `docs/DEPLOY_WINDOWS.md`，接口见 `API.md`。
 
-```text
-[Search] depth=8 nodes=144,248 nps=15,169 tt=24.5% cutoff=34.2% elapsed=9.51s
-[Endgame] move=6/12 scenario=15/24 nodes=135 nps=269 elapsed=0.50s
-```
+### 打包
 
-## HTTP 接口
-
-### `POST /ai_move`
-
-请求体示例：
-
-```json
-{
-  "board": [
-    {
-      "pos": [0, 0],
-      "numU": 7,
-      "numR": 4,
-      "numD": 9,
-      "numL": 4,
-      "owner": 1
-    }
-  ],
-  "myHand": [
-    { "numU": 7, "numR": 6, "numD": 2, "numL": 3, "canUse": true }
-  ],
-  "oppHand": [
-    { "numU": 0, "numR": 0, "numD": 0, "numL": 0, "canUse": true }
-  ],
-  "myOwner": 1,
-  "currentPlayer": 1,
-  "rules": "三明牌, 加算",
-  "solver": "minimax"
-}
-```
-
-字段说明：
-
-| 字段 | 说明 |
+| 命令 | 产物 |
 | --- | --- |
-| `board` | 当前棋盘卡牌列表，空格不需要传 |
-| `pos` | 棋盘坐标 `[row, col]`，范围 `0..2` |
-| `owner` | `1=蓝方`，`2=红方` |
-| `myHand` | 我方剩余手牌 |
-| `oppHand` | 对手剩余手牌，未知牌四边都填 `0` |
-| `myOwner` | 我方颜色，`1=蓝方`，`2=红方` |
-| `currentPlayer` | 当前行动方，`1=蓝方`，`2=红方` |
-| `rules` | 规则文本，可包含多个中文规则名 |
-| `solver` | `minimax` 或 `monte_carlo`，默认 `minimax` |
-
-响应会包含推荐卡牌、落点、胜率估计、对手手牌分析和性能统计。
+| `scripts\build_release.bat` | 最小可用版：`dist\release\`（`TTC_Siren.exe` + `engine\`）和 `dist\TTC_Siren_release.zip` |
+| `build_all.bat` | 全部：`dist\engine\`（C# 引擎）、`dist\TTC_Siren.exe`（CPython）、`dist\TTC_Siren_PYPY\`（PyPy） |
 
 ## 数据文件
 
@@ -151,10 +105,9 @@ http://127.0.0.1:5000
 
 ## 测试
 
-运行回归测试：
-
 ```bash
-python -m pytest -q
+python -m pytest -q                                   # Python 回归测试（含 C# 引擎桥接与自动启动）
+dotnet test csharp/TTC.Siren.sln -c Release           # C# 引擎：单元测试 + 与 Python 逐位一致的 parity 测试
 ```
 
 当前测试覆盖重点：
@@ -165,18 +118,32 @@ python -m pytest -q
 - 王牌杀手与逆转交互。
 - 残局信息集安全选择。
 - 合法未知牌候选的星级限制过滤。
+- C# 引擎与 Python 求解结果逐位一致（分数按 IEEE-754 位比较）。
 
 ## 项目结构
 
 ```text
 TTC_Siren/
-├── ai/                         # 搜索、评估、蒙特卡洛和未知牌处理
-├── config/                     # 未知牌采样配置
+├── app.py                      # 服务入口（Flask，127.0.0.1:5000）
+├── ai_server.py                # /ai_move 等接口与求解流程
+├── serve_waitress.py           # 可选：用 waitress 运行同一服务
+├── console_ui.py, csv_compat.py
+├── draft_analyzer_app.py       # 选拔分析演示
+├── npc_deck_recommender_demo.py# NPC 卡组推荐演示
+├── ai/                         # 搜索、评估、蒙特卡洛、未知牌处理、C# 引擎客户端与自动启动
 ├── core/                       # Card / Board / GameState / Player
+├── config/                     # 未知牌采样配置
 ├── data/                       # 幻卡数据库
-├── docs/                       # 规则文档
-├── tests/                      # 回归测试
-├── ai_server.py                # Flask AI 服务入口
+├── csharp/                     # C# 求解引擎（Core / Search / Engine）、Bench 与测试
+├── tests/                      # Python 回归测试
+├── tools/                      # 基准测试、parity golden 生成、压测脚本
+├── scripts/                    # 构建与 PyPy 脚本（build_release / build_engine / build_exe / build_exe_pypy / install_pypy / run_pypy）
+├── assets/                     # 图标
+├── docs/                       # 规则说明、部署指南；docs/migration/ 是 C# 迁移的记录（报告、审查、计划）
+├── run_local.bat               # 一键从源码运行
+├── build_all.bat               # 打包全部版本
+├── API.md                      # HTTP 接口
+├── CLAUDE.md                   # 给 Claude 会话的工作规范
 └── README.md
 ```
 

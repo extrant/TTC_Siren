@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Markdown tables for docs/reports/PHASE7_INTEGRATION.md from the measurement files (so no number is typed by hand).
+Markdown tables for docs/migration/reports/PHASE7_INTEGRATION.md from the measurement files (so no number is typed by hand).
 
-  python tools/phase7/render_tables.py latency docs/reports/phase7/latency_p_cores.json
-  python tools/phase7/render_tables.py load docs/reports/phase7/load_all_cpus.jsonl
+  python tools/phase7/render_tables.py latency docs/migration/reports/phase7/latency_p_cores.json
+  python tools/phase7/render_tables.py load docs/migration/reports/phase7/load_all_cpus.jsonl
 """
 import collections
 import json

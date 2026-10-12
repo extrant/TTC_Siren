@@ -2,7 +2,7 @@
 """
 Server GC against workstation GC for the engine (review L7-1, CLAUDE.md section 6: Baseline -> Modify -> ... -> Compare).
 
-  python tools/phase7/gc_compare.py --runs 3 --out docs/reports/phase7/gc
+  python tools/phase7/gc_compare.py --runs 3 --out docs/migration/reports/phase7/gc
 
 The same build is started with ``DOTNET_gcServer=1`` and ``=0`` (the environment variable overrides ``System.GC.Server`` of the
 runtimeconfig.json, so only the GC differs). For every repetition, CPU set and GC mode ``run_load_matrix.py`` runs the engine load matrix

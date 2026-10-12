@@ -2,8 +2,8 @@
 """
 The Phase 7 load-test matrix on one machine: engine workers x concurrency x category x CPU set.
 
-  python tools/phase7/run_load_matrix.py --cpu all    --out docs/reports/phase7/load_all.jsonl
-  python tools/phase7/run_load_matrix.py --cpu 0xFFF  --out docs/reports/phase7/load_p.jsonl      # P-cores of the i7-13650HX
+  python tools/phase7/run_load_matrix.py --cpu all    --out docs/migration/reports/phase7/load_all.jsonl
+  python tools/phase7/run_load_matrix.py --cpu 0xFFF  --out docs/migration/reports/phase7/load_p.jsonl      # P-cores of the i7-13650HX
   python tools/phase7/run_load_matrix.py --cpu auto   ...                                          # the detected P-core set
 
 For every engine worker count it starts the published/built engine (``dotnet <dll>``) with that CPU affinity (the engine sees only those

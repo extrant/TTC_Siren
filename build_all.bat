@@ -7,19 +7,19 @@ set "TTC_BUILD_CHAIN=1"
 echo ============================================================
 echo  [1/3] C# engine -^> dist\engine\TTC.Siren.Engine.exe
 echo ============================================================
-call "%~dp0build_engine.bat"
+call "%~dp0scripts\build_engine.bat"
 
 echo.
 echo ============================================================
 echo  [2/3] CPython build -^> dist\TTC_Siren.exe
 echo ============================================================
-call "%~dp0build_exe.bat"
+call "%~dp0scripts\build_exe.bat"
 
 echo.
 echo ============================================================
 echo  [3/3] PyPy build -^> dist\TTC_Siren_PYPY\TTC_Siren_PYPY.exe
 echo ============================================================
-call "%~dp0build_exe_pypy.bat"
+call "%~dp0scripts\build_exe_pypy.bat"
 
 echo.
 echo ============================================================

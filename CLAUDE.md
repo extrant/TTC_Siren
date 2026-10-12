@@ -1,8 +1,8 @@
 # CLAUDE.md — TTC_Siren C# 迁移期间的长期规则
 
-本文件是整个 Python → C# 迁移期间 **不可违反** 的工作规范。每个 Claude 会话开始时必须先读本文件，再读 `CSHARP_MIGRATION.md`。
+本文件是整个 Python → C# 迁移期间 **不可违反** 的工作规范。每个 Claude 会话开始时必须先读本文件，再读 `docs/migration/CSHARP_MIGRATION.md`。
 
-- `CSHARP_MIGRATION.md` 是迁移进度的 **唯一事实来源**（架构、baseline、Phase 状态、差异、BLOCKED、下一步）。
+- `docs/migration/CSHARP_MIGRATION.md`（下文简称 `CSHARP_MIGRATION.md`）是迁移进度的 **唯一事实来源**（架构、baseline、Phase 状态、差异、BLOCKED、下一步）。
 - 任何阶段开始前，先确认 `CSHARP_MIGRATION.md` 中该 Phase 的范围与验收条件；任何阶段结束后，必须更新它。
 - 用户每次只授权一个 Phase。未经用户明确指示，不得进入下一 Phase。
 
@@ -85,7 +85,7 @@ csharp/                      C# 解决方案根目录
   src/TTC.Siren.Core/        卡牌数据、规则、GameState、MakeMove/UndoMove
   src/TTC.Siren.Search/      评估、排序、Minimax/AlphaBeta/ID、TT、残局
   src/TTC.Siren.Bench/       benchmark 控制台
-  src/TTC.Siren.Engine/      C# 求解引擎（本机 HTTP 服务，ASP.NET Core，只监听 127.0.0.1:5300；工作线程池与求解服务 `SolveService`）。决定 A-30：产品就是 Python 原服务 + 这个引擎，Python 服务启动时自动拉起它（`ai/engine_launcher.py`），`build_engine.bat` 发布到 `dist\engine`；A-20：出错不回退 Python
+  src/TTC.Siren.Engine/      C# 求解引擎（本机 HTTP 服务，ASP.NET Core，只监听 127.0.0.1:5300；工作线程池与求解服务 `SolveService`）。决定 A-30：产品就是 Python 原服务 + 这个引擎，Python 服务启动时自动拉起它（`ai/engine_launcher.py`），`scriptsuild_engine.bat` 发布到 `dist\engine`；A-20：出错不回退 Python
   tests/TTC.Siren.Tests/     xUnit 单元测试 + parity 测试
 tools/parity/                Python 侧 golden 数据生成脚本（只读调用 reference 实现）
 tools/phase7/                Phase 7 的语料、端到端参考、延迟与压测脚本

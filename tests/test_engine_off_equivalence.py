@@ -2,7 +2,7 @@
 
 ``tests/data/engine_off_expected.json`` holds the (normalised) responses that commit 03b4704, the last commit before Phase 7, gave for a
 sample of the 360-request corpus (tools/phase7/gen_corpus.py, seed 20261010) with fixed random seeds and deterministic search settings
-(max_depth 4, max_time 10^6). The full 360-request comparison is tools/phase7/equivalence.py (see docs/reports/PHASE7_INTEGRATION.md);
+(max_depth 4, max_time 10^6). The full 360-request comparison is tools/phase7/equivalence.py (see docs/migration/reports/PHASE7_INTEGRATION.md);
 this is its regression sample. Fields that measure time are excluded (see equivalence.normalise).
 """
 import json
