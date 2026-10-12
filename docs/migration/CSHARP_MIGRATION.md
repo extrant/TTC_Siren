@@ -1262,3 +1262,10 @@ if __name__ == '__main__':
 - 本文件移到 `docs/migration/`；Phase 报告、Opus 审查、已完成的 goal 文件（原 `.claude/`）与 Phase 8 计划都在 `docs/migration/` 下（`reports/`、`reviews/`、`goals/`）；文中的旧路径已改为新路径。
 - 构建与 PyPy 脚本移到 `scripts/`（`build_engine`、`build_exe`、`build_exe_pypy`、`install_pypy`、`run_pypy`、`pypy_launcher.cs`，新增 `build_release.bat`：最小发布包 `dist\TTC_Siren_release.zip` = `TTC_Siren.exe` + `engine\`）；根目录保留 `run_local.bat` 与 `build_all.bat`。图标移到 `assets/`。
 - 删除：`data/1.csv`（与 `TripleTriadCard.csv` 逐字节相同）、`.gitmodules`（指向不存在的子模块）、`TTC_Siren.spec`（PyInstaller 每次构建生成，改为忽略）、`docs/README.md`（旧版 README）、`docs/migration/reports/phase8a/`、`phase8b/`（已删除功能的原始数据与截图）。
+
+### 12.16 Python/ 与 CSharp/ 两个文件夹（2026-10-12）
+
+- 根目录只剩 `app.py`（一键启动：第一次自动构建 C# 引擎到 `dist/engine`，再在 `Python/` 中运行原服务）、`README.md`、`Python/`、`CSharp/`、`docs/`；本规范文件在 `.claude/CLAUDE.md`，接口文档在 `docs/API.md`。
+- `Python/`：原服务的全部代码、`data/`、`tests/`（`conftest.py` 把工作目录设为 `Python/`）、`tools/`、`scripts/`（打包脚本与图标）。`CSharp/`：原 `csharp/` 的解决方案，加 `build_engine.bat`。构建输出统一在仓库根目录的 `dist/`。
+- C# 侧只改了定位：`CardDb.LocateDataFile` 也找 `Python/data/`；golden 绑定的源文件路径相对 `Python/`（相对路径与哈希都不变，golden 无需重生成）；`EngineTests`、Bench 的路径。
+- 本节之前的报告、审查与记录中的路径（`csharp/…`、`tools/…`、`data/…`、根目录的脚本）是当时的位置。

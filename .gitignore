@@ -1,15 +1,13 @@
+# Python
+__pycache__/
 *.pyc
-/__pycache__
-/helloagents
+.pytest_cache/
 
-# Phase 8A: runtime data and secrets never go into the repository
-**/keys.json
-**/gamelogs/
-*.pfx
-/publish/
-
-# build output of the scripts in scripts\ (PyInstaller writes TTC_Siren.spec on every build), and the local PyPy
+# build output: dist\ (C# engine, TTC_Siren.exe, the release package), the PyInstaller work folder, the local PyPy of Python\scripts\install_pypy.bat
 /dist/
 /build/
-/PYPY/
+/Python/PYPY/
 *.spec
+
+# local tools
+/helloagents

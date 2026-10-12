@@ -25,39 +25,39 @@ answers 503 `connection_failed`.
 
 | What | How |
 |---|---|
-| Run from the repository | Double-click **`run_local.bat`** (`run_local.bat pypy` for PyPy from `PYPY\pypy3.exe`). The first run builds the engine (`scriptsuild_engine.bat`, needs the .NET 10 SDK); then it runs `python app.py`, which starts the engine. `scriptsun_pypy.bat`, `python app.py` and `serve_waitress.py` start the engine the same way once it is built. |
-| Build the engine only | `scriptsuild_engine.bat` -> `dist\engine\TTC.Siren.Engine.exe`: one self-contained file (about 50 MB); the machine that runs it needs **no .NET installed**. |
-| Build the smallest package to hand out | `scriptsuild_release.bat` -> `distelease\` (`TTC_Siren.exe` + `engine\TTC.Siren.Engine.exe` + `使用说明.txt`) and `dist\TTC_Siren_release.zip`. The recipient unzips it and double-clicks `TTC_Siren.exe`; no Python, no .NET. |
-| Build everything to distribute | `build_all.bat` -> `dist\engine\` (C# engine), `dist\TTC_Siren.exe` (CPython), `dist\TTC_Siren_PYPY\` (PyPy). Zip `dist\`; on the target machine double-click `TTC_Siren.exe` (or `TTC_Siren_PYPY.exe`) as before. |
+| Run from the repository | **`python app.py`** in the repository root (needs the packages of `Python\requirements.txt`). The first start builds the engine into `dist\engine` (needs the .NET 10 SDK); then it runs the server of `Python\`, which starts the engine. `python app.py` inside `Python\`, `python serve_waitress.py` and `Python\scripts\run_pypy.bat` start the engine the same way once it is built. |
+| Build the engine only | `CSharp\build_engine.bat` -> `dist\engine\TTC.Siren.Engine.exe`: one self-contained file (about 50 MB); the machine that runs it needs **no .NET installed**. |
+| Build the smallest package to hand out | `Python\scripts\build_release.bat` -> `dist\release\` (`TTC_Siren.exe` + `engine\TTC.Siren.Engine.exe` + `使用说明.txt`) and `dist\TTC_Siren_release.zip`. The recipient unzips it and double-clicks `TTC_Siren.exe`; no Python, no .NET. |
+| Build everything to distribute | `Python\scripts\build_all.bat` -> `dist\engine\` (C# engine), `dist\TTC_Siren.exe` (CPython), `dist\TTC_Siren_PYPY\` (PyPy). Zip `dist\`; on the target machine double-click `TTC_Siren.exe` (or `TTC_Siren_PYPY.exe`) as before. |
 
-**How the server starts the engine** (`ai/engine_launcher.py`, called by `app.py` and `serve_waitress.py` before they listen; the start-up banner says what happened):
+**How the server starts the engine** (`Python/ai/engine_launcher.py`, called by `Python/app.py` and `Python/serve_waitress.py` before they listen; the start-up banner says what happened):
 
 1. `TTC_CS_ENGINE=off` -> nothing is started; the Python solver answers (as before Phase 7).
 2. An engine already answers at `TTC_CS_ENGINE_URL` (default `http://127.0.0.1:5300`) -> it is used (for example the Windows service of section 4).
-3. Otherwise, unless `TTC_CS_ENGINE_AUTOSTART=off` or the URL is not loopback, `TTC.Siren.Engine.exe` is looked for: `TTC_CS_ENGINE_EXE`, then `engine\`, `..\engine\` and
-   `dist\engine\` next to the packaged exe and in the repository. It is started on the port of the URL with **the card database this server loads** (`--card-db`), its output
+3. Otherwise, unless `TTC_CS_ENGINE_AUTOSTART=off` or the URL is not loopback, `TTC.Siren.Engine.exe` is looked for: `TTC_CS_ENGINE_EXE`, then `engine\`, `..\engine\`, `dist\engine\` and
+   `..\dist\engine\` next to the packaged exe and from the `Python` folder (so `dist\engine` of the repository is found). It is started on the port of the URL with **the card database this server loads** (`--card-db`), its output
    goes to `engine.log` next to it, and it is tied to the server process (a Windows job object): it ends when the server ends, also when the console window is closed.
-4. Not found -> the banner says `未找到（先运行 scriptsuild_engine.bat）` and minimax requests of `/ai_move` answer 503 `connection_failed` until an engine runs (A-20: no silent fallback).
+4. Not found -> the banner says `未找到（运行 CSharp\build_engine.bat，或用根目录的 app.py 启动）` and minimax requests of `/ai_move` answer 503 `connection_failed` until an engine runs (A-20: no silent fallback).
 
 ## 1. What you need
 
 | Item | Notes |
 |---|---|
 | Windows Server 2016 or newer, x64 | Tested only on Windows 11 here; the engine uses nothing Windows specific except the optional service hosting. |
-| .NET | **Nothing** for the self-contained build of `scriptsuild_engine.bat`. Only the framework-dependent publish of section 2 needs the "ASP.NET Core Runtime 10.x" (check with `dotnet --list-runtimes`). Building needs the .NET 10 SDK. |
+| .NET | **Nothing** for the self-contained build of `scripts\build_engine.bat`. Only the framework-dependent publish of section 2 needs the "ASP.NET Core Runtime 10.x" (check with `dotnet --list-runtimes`). Building needs the .NET 10 SDK. |
 | The Python environment of the server | CPython or PyPy; the engine client uses the standard library only. |
-| The card database | The engine and the Python server must load **the same file** `data\幻卡数据库.csv`; the Python side compares SHA-256 hashes at start-up and refuses the engine if they differ. |
+| The card database | The engine and the Python server must load **the same file** `Python\data\幻卡数据库.csv` (the release package carries it inside `TTC_Siren.exe`); the Python side compares SHA-256 hashes at start-up and refuses the engine if they differ. |
 
 ## 2. Build and publish (on a development machine with the .NET 10 SDK)
 
-`scriptsuild_engine.bat` (self-contained, one file, recommended), or framework-dependent:
+`scripts\build_engine.bat` (self-contained, one file, recommended), or framework-dependent:
 
 ```
-dotnet publish csharp\src\TTC.Siren.Engine -c Release -o publish\engine
+dotnet publish CSharp\src\TTC.Siren.Engine -c Release -o publish\engine
 ```
 
 Copy the folder (`dist\engine` or `publish\engine`) to the server, for example to `C:\ttc\engine`. It contains `TTC.Siren.Engine.exe`, `engine.appsettings.json`
-and (framework-dependent only) `TTC.Siren.Engine.dll` and the runtime configuration. Copy `data\幻卡数据库.csv` next to your Python server as before, for example `C:\ttc\data\`.
+and (framework-dependent only) `TTC.Siren.Engine.dll` and the runtime configuration. Copy `Python\data\幻卡数据库.csv` next to your Python server as before, for example `C:\ttc\data\`.
 
 ## 3. Configuration
 
@@ -205,7 +205,7 @@ For the server (not measured there): 16 workers need at most about 1.7 GiB and 3
 throughput grows with the number of workers up to about the number of physical cores and then flattens; more workers than that only raise latency.
 
 1. Install the runtime, publish the engine (sections 1 and 2) and make sure Python 3 is available.
-2. From the repository on the server, generate the request payloads once: `python tools\phase7\gen_corpus.py --out tools\phase7\corpus\corpus_s20261010_n360.json` and
+2. In the `Python` folder of the repository on the server, generate the request payloads once: `python tools\phase7\gen_corpus.py --out tools\phase7\corpus\corpus_s20261010_n360.json` and
    `python tools\phase7\e2e_reference.py --corpus tools\phase7\corpus\corpus_s20261010_n360.json --out tools\parity\golden\e2e_reference_g1_s20261010_n360.jsonl.gz`.
 3. Run the matrix for the worker counts you want to compare, with all CPUs:
    `python tools\phase7\run_load_matrix.py --cpu all --workers 4,8,16,24,32 --concurrency 1,4,8,16,24,32 --out C:\temp\load_server.jsonl`
